@@ -118,7 +118,7 @@ internal sealed class CdmSync
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         DateTimeOffset now = _clock.GetUtcNow();
-        if (now < _retryAt)
+        if (now < _retryAt || cancellationToken.IsCancellationRequested)
         {
             return;
         }
@@ -172,6 +172,8 @@ internal sealed class CdmSync
             }
         }
 
+        // The client is only called while the plugin runs: a cycle the shutdown cancelled stops here.
+        cancellationToken.ThrowIfCancellationRequested();
         if (_gate.CanWrite(out string callsign, out _))
         {
             foreach (string icao in _store.AirportsMasteredBy(callsign))
@@ -182,6 +184,7 @@ internal sealed class CdmSync
             WriteScratchpadRemarks(callsign, traffic);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         Synced?.Invoke();
     }
 

@@ -174,21 +174,35 @@ internal sealed class MasterRole
             me = _lastCallsign;
         }
 
-        IReadOnlyList<string> held = me.Length == 0 ? Array.Empty<string>() : _store.AirportsMasteredBy(me);
-        if (held.Count == 0)
-        {
-            return;
-        }
-
         using CancellationTokenSource cancel = new(timeout);
         try
         {
-            Task.WaitAll(held.Select(a => ReleaseOneAsync(a, me, cancel.Token)).ToArray(), timeout);
+            ReleaseAllAsync(me, cancel.Token).Wait(timeout);
         }
         catch (AggregateException)
         {
             // A release that timed out is logged by the client; vIFF also drops masters that leave the network.
         }
+    }
+
+    /// <summary>
+    /// Releases every master role held, stopping when <paramref name="cancellationToken"/> is cancelled; used on disconnect.
+    /// </summary>
+    public Task ReleaseAllAsync(CancellationToken cancellationToken)
+    {
+        string me;
+        lock (_lock)
+        {
+            me = _lastCallsign;
+        }
+
+        return ReleaseAllAsync(me, cancellationToken);
+    }
+
+    private Task ReleaseAllAsync(string me, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> held = me.Length == 0 ? Array.Empty<string>() : _store.AirportsMasteredBy(me);
+        return Task.WhenAll(held.Select(a => ReleaseOneAsync(a, me, cancellationToken)));
     }
 
     private async Task ReleaseOneAsync(string icao, string me, CancellationToken cancellationToken)

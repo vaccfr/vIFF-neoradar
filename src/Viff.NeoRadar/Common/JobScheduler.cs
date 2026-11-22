@@ -33,6 +33,20 @@ internal sealed class JobScheduler
     }
 
     /// <summary>
+    /// Gets a value indicating whether <see cref="Stop"/> has been called, after which no work may call the client.
+    /// </summary>
+    public bool IsStopped
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _stopped;
+            }
+        }
+    }
+
+    /// <summary>
     /// Registers work that runs every <paramref name="period"/>, first on the next tick.
     /// </summary>
     public PeriodicJob Every(string name, TimeSpan period, Func<CancellationToken, Task> work)

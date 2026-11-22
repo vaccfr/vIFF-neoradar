@@ -41,6 +41,7 @@ public sealed class ViffCdmPlugin : BasePlugin
     private JobScheduler? _scheduler;
     private JobScheduler.PeriodicJob? _syncJob;
     private ViffApiClient? _api;
+    private Notifier? _notifier;
     private CdmStore? _store;
     private TagMenus? _tagMenus;
     private MasterRole? _master;
@@ -73,6 +74,8 @@ public sealed class ViffCdmPlugin : BasePlugin
     {
         Guard(nameof(Shutdown), () =>
         {
+            // Mute first: work still finishing on the pool must not post to a client that is shutting down.
+            _notifier?.Mute();
             _scheduler?.Stop(TimeSpan.FromSeconds(2));
             _master?.ReleaseAll(TimeSpan.FromSeconds(2));
             _panel?.Close();
@@ -92,6 +95,7 @@ public sealed class ViffCdmPlugin : BasePlugin
         _scheduler = null;
         _syncJob = null;
         _api = null;
+        _notifier = null;
         _store = null;
         _tagMenus = null;
         _master = null;
@@ -130,11 +134,7 @@ public sealed class ViffCdmPlugin : BasePlugin
     public override void OnFsdDisconnected(FsdDisconnectedEvent evt) => Guard(nameof(OnFsdDisconnected), () =>
     {
         MasterRole? master = _master;
-        _scheduler?.RunOnce("release on disconnect", _ =>
-        {
-            master?.ReleaseAll(TimeSpan.FromSeconds(5));
-            return System.Threading.Tasks.Task.CompletedTask;
-        });
+        _scheduler?.RunOnce("release on disconnect", ct => master?.ReleaseAllAsync(ct) ?? System.Threading.Tasks.Task.CompletedTask);
     });
 
     public override void OnAirportAdded(AirportAddedEvent evt) => Guard(nameof(OnAirportAdded), RequestSync);
@@ -176,6 +176,11 @@ public sealed class ViffCdmPlugin : BasePlugin
 
         void Changed()
         {
+            if (scheduler.IsStopped)
+            {
+                return;
+            }
+
             publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
             _panel?.Refresh();
             RequestSync();
@@ -218,14 +223,19 @@ public sealed class ViffCdmPlugin : BasePlugin
 
         _scheduler = scheduler;
         _api = api;
+        _notifier = notifier;
         _store = store;
         _tagMenus = tagMenus;
         _master = master;
         _panel = panel;
         _syncJob = scheduler.Every("sync", TimeSpan.FromSeconds(refreshSeconds), sync.RunAsync);
-        scheduler.Every("tags", TimeSpan.FromSeconds(1), _ =>
+        scheduler.Every("tags", TimeSpan.FromSeconds(1), ct =>
         {
-            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
+            if (!ct.IsCancellationRequested)
+            {
+                publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
+            }
+
             return System.Threading.Tasks.Task.CompletedTask;
         });
 

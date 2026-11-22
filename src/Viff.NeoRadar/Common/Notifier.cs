@@ -12,6 +12,7 @@ internal sealed class Notifier
 
     private readonly IChatApi _chat;
     private readonly IFeedbackApi _feedback;
+    private volatile bool _muted;
 
     public Notifier(IChatApi chat, IFeedbackApi feedback)
     {
@@ -20,13 +21,29 @@ internal sealed class Notifier
     }
 
     /// <summary>
+    /// Stops every further message, from the start of shutdown: background work still finishing must not call the client.
+    /// </summary>
+    public void Mute() => _muted = true;
+
+    /// <summary>
     /// Posts a line the controller can read again in the vIFF chat channel.
     /// </summary>
-    public void Say(string message, bool urgent = false) =>
-        _chat.SendClientMessage(new ClientTextMessageEvent("vIFF", message, IsUrgent: urgent, Channel: Channel));
+    public void Say(string message, bool urgent = false)
+    {
+        if (!_muted)
+        {
+            _chat.SendClientMessage(new ClientTextMessageEvent("vIFF", message, IsUrgent: urgent, Channel: Channel));
+        }
+    }
 
     /// <summary>
     /// Shows a toast the controller may safely miss.
     /// </summary>
-    public void Toast(string message, FeedbackKind kind = FeedbackKind.Info) => _feedback.Show(message, kind, 3000);
+    public void Toast(string message, FeedbackKind kind = FeedbackKind.Info)
+    {
+        if (!_muted)
+        {
+            _feedback.Show(message, kind, 3000);
+        }
+    }
 }
