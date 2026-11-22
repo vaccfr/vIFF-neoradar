@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/neoradar-project/schemas/main/systems/lists.schema.json
+# Example start-up list using the vIFF CDM plugin's items, in the column order of the French vACC A-CDM start-up list.
+# Host items (STS, SID, RWY, CFL, ASSR, ...) are omitted; add them from your own package.
+---
+- name: CDM START-UP
+  filterExpressions: ["==", "plugin:vIFF CDM:EXP_Listed", "1"]
+  columns:
+    - name: C/S
+      widthChars: 8
+      tagItem:
+        itemName: callsign
+        textAlign: left
+    - name: BY
+      widthChars: 2
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_BY"
+    - name: DEICE
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_DEICE"
+        leftClick: "plugin:vIFF CDM:ACTION_DEICE Menu"
+    - name: TTG
+      widthChars: 3
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TTG"
+    - name: E/TOBT
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TOBT"
+        leftClick: "plugin:vIFF CDM:ACTION_TOBT Menu"
+        rightClick: "plugin:vIFF CDM:ACTION_TOBT Menu"
+    - name: TSAT
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TSAT"
+    - name: ASAT
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_ASAT"
+    - name: TTOT
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TTOT"
+        leftClick: "plugin:vIFF CDM:ACTION_TTOT Menu"
+    - name: CTOT
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_CTOT"
+        leftClick: "plugin:vIFF CDM:ACTION_CTOT Menu"
+        rightClick: "plugin:vIFF CDM:ACTION_CTOT Menu"
+    - name: ETFMS
+      widthChars: 7
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_ETFMS"
+        leftClick: "plugin:vIFF CDM:ACTION_ETFMS Menu"
+    - name: MSG
+      widthChars: 3
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_MSG"
+    - name: RDY
+      widthChars: 3
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_RDY"
+        leftClick: "plugin:vIFF CDM:ACTION_RDY"
+        rightClick: "plugin:vIFF CDM:ACTION_RDY REA"
+    - name: ASRT
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_ASRT"

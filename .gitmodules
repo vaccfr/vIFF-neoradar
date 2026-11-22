@@ -1,0 +1,3 @@
+[submodule "extern/plugin-sdk"]
+	path = extern/plugin-sdk
+	url = https://github.com/neoradar-project/plugin-sdk.git

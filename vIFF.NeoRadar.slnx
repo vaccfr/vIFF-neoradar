@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Viff.NeoRadar/Viff.NeoRadar.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Viff.NeoRadar.Tests/Viff.NeoRadar.Tests.csproj" />
+  </Folder>
+</Solution>

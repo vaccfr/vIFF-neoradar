@@ -1,0 +1,17 @@
+[
+  {
+    "itemName": "plugin:vIFF CDM:TAG_TSAT",
+    "separatorBefore": true
+  },
+  {
+    "itemName": "plugin:vIFF CDM:TAG_CTOT",
+    "separatorBefore": true,
+    "leftClick": "plugin:vIFF CDM:ACTION_CTOT Menu"
+  },
+  {
+    "itemName": "plugin:vIFF CDM:TAG_RDY",
+    "separatorBefore": true,
+    "leftClick": "plugin:vIFF CDM:ACTION_RDY",
+    "rightClick": "plugin:vIFF CDM:ACTION_RDY REA"
+  }
+]

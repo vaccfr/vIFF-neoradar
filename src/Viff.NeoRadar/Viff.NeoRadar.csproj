@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Viff.NeoRadar</RootNamespace>
+    <AssemblyName>Viff.NeoRadar</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Compile-only: the client supplies its own PluginSdk at runtime, so the plugin's output must not carry one. -->
+    <ProjectReference Include="..\..\extern\plugin-sdk\src\NeoRadar.PluginSdk\NeoRadar.PluginSdk.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Viff.NeoRadar.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The example package fragment travels beside the built plugin for a package author to copy. -->
+    <None Include="Package\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

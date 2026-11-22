@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Viff.NeoRadar\Viff.NeoRadar.csproj" />
+    <!-- Tests run outside the client, so they need the SDK at runtime. -->
+    <ProjectReference Include="..\..\extern\plugin-sdk\src\NeoRadar.PluginSdk\NeoRadar.PluginSdk.csproj" />
+  </ItemGroup>
+</Project>

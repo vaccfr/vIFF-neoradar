@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet build vIFF.NeoRadar.slnx -c Release
+      - run: dotnet test vIFF.NeoRadar.slnx -c Release --no-build
+      - name: Check the SDK is not shipped beside the plugin
+        shell: bash
+        run: |
+          if [ -f src/Viff.NeoRadar/bin/Release/net10.0/NeoRadar.PluginSdk.dll ]; then
+            echo "NeoRadar.PluginSdk.dll must not be copied beside the plugin; the client would refuse to load it." >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Viff.NeoRadar
+          path: |
+            src/Viff.NeoRadar/bin/Release/net10.0/Viff.NeoRadar.dll
+            src/Viff.NeoRadar/bin/Release/net10.0/Viff.NeoRadar.pdb
+            src/Viff.NeoRadar/bin/Release/net10.0/Package/**
