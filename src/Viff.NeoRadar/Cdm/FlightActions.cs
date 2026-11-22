@@ -29,7 +29,7 @@ internal sealed class FlightActions
     private readonly StripWriter? _strips;
     private readonly AirportControls? _controls;
     private readonly EventSlots? _slots;
-    private readonly bool _readySetTsac;
+    private readonly Func<bool> _readySetTsac;
 
     public FlightActions(
         IViffApi api,
@@ -42,12 +42,12 @@ internal sealed class FlightActions
         StripWriter? strips = null,
         AirportControls? controls = null,
         EventSlots? slots = null,
-        bool readySetTsac = false)
+        Func<bool>? readySetTsac = null)
     {
         _strips = strips;
         _controls = controls;
         _slots = slots;
-        _readySetTsac = readySetTsac;
+        _readySetTsac = readySetTsac ?? (() => false);
         _api = api;
         _store = store;
         _gate = gate;
@@ -69,7 +69,7 @@ internal sealed class FlightActions
 
         string now = CdmTime.ToHhmm(_clock.GetUtcNow());
         bool rea = record.EffectiveCtot.Length > 0;
-        if (airport.IsCdm && _readySetTsac)
+        if (airport.IsCdm && _readySetTsac())
         {
             _strips?.Change(callsign, s => s.With(StripData.Tsac, StripData.TsacPending), urgent: true);
         }

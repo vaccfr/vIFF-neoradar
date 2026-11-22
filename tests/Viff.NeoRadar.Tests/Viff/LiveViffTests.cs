@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Viff.NeoRadar.Cdm;
+using Viff.NeoRadar.Config;
 using Viff.NeoRadar.Tags;
 using Viff.NeoRadar.Tests.Fakes;
 using Viff.NeoRadar.Viff;
@@ -58,12 +59,12 @@ public sealed class LiveViffTests
 
         FakeLogger logger = new();
         using ViffApiClient api = new(new Uri("https://viff-system.network/"), "TEST", "vIFF-neoradar/tests", logger);
-        using RemoteText remote = new(new Uri(RemoteText.DefaultBaseUrl), "vIFF-neoradar/tests", logger);
+        using RemoteText remote = new("vIFF-neoradar/tests", logger);
 
         IReadOnlyList<RelevantFlight>? relevant = await api.GetRelevantAsync(string.Empty, CancellationToken.None);
         IReadOnlyDictionary<string, string>? statuses = await api.GetAllStatusAsync(CancellationToken.None);
         IReadOnlyDictionary<string, string>? onTime = await api.GetAllOnTimeAsync(CancellationToken.None);
-        string? slotsFile = await remote.GetAsync("ctot.txt", CancellationToken.None);
+        string? slotsFile = await remote.GetAsync(new Uri("https://raw.githubusercontent.com/vaccfr/vIFF-CDM/refs/heads/main/ctot.txt"), CancellationToken.None);
 
         Assert.NotNull(relevant);
         Assert.NotNull(statuses);
@@ -102,5 +103,29 @@ public sealed class LiveViffTests
                 $"TTOT {Show(CdmItem.Ttot),-4} CTOT {Show(CdmItem.Ctot),-4} REG {Show(CdmItem.Regulation),-14} " +
                 $"ETFMS {Show(CdmItem.Etfms),-8} RDY {(tags.Ready ? "set" : "-")} window {tags.Tsat}");
         }
+    }
+
+    [Fact]
+    public async Task LiveFiles_TheFrenchVaccCdmFilesParse()
+    {
+        if (!s_enabled)
+        {
+            return;
+        }
+
+        const string baseUrl = "https://raw.githubusercontent.com/vaccfr/vIFF-CDM/refs/heads/main/";
+        FakeLogger logger = new();
+        using RemoteText remote = new("vIFF-neoradar/tests", logger);
+        List<string> warnings = new();
+
+        RateTable rates = RateTable.Parse((await remote.GetAsync(new Uri(baseUrl + "rate.txt"), CancellationToken.None))!, warnings);
+        TaxiZones zones = TaxiZones.Parse((await remote.GetAsync(new Uri(baseUrl + "taxizones.txt"), CancellationToken.None))!, warnings);
+        SidIntervals intervals = SidIntervals.Parse((await remote.GetAsync(new Uri(baseUrl + "sidInterval.txt"), CancellationToken.None))!, warnings);
+
+        Console.WriteLine($"rates {rates.Count} for {rates.Airports.Count} airports, zones {zones.Count}, intervals {intervals.Count}");
+        // The vACC's files are hand-written: a malformed line is skipped, as the CDM plugin would, and reported here.
+        warnings.ForEach(Console.WriteLine);
+        Assert.True(warnings.Count < 5, string.Join("; ", warnings));
+        Assert.True(rates.Count > 0 && zones.Count > 0 && intervals.Count > 0);
     }
 }

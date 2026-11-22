@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using NeoRadar.PluginSdk.Aircraft;
+using NeoRadar.PluginSdk.Airport;
 using NeoRadar.PluginSdk.ControllerData;
 using NeoRadar.PluginSdk.Flightplan;
 
@@ -20,6 +23,12 @@ internal sealed record TrafficEntry(
     /// <summary>Gets a value indicating whether start-up has been approved.</summary>
     public bool Started => GroundStatus != GroundStatus.None;
 
+    /// <summary>Gets the aircraft's latitude, for taxi zones, or null when the client has no position.</summary>
+    public double? Latitude { get; init; }
+
+    /// <summary>Gets the aircraft's longitude, for taxi zones, or null when the client has no position.</summary>
+    public double? Longitude { get; init; }
+
     /// <summary>Gets the runway and SID as vIFF stores them, "RWY/SID", or empty when no runway is known.</summary>
     public string DepInfo => Runway.Length == 0 ? string.Empty : $"{Runway}/{Sid}";
 }
@@ -31,12 +40,24 @@ internal sealed class TrafficSnapshot
 {
     private static readonly TrafficEntry s_unknown = new(GroundStatus.None, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 
-    private readonly IReadOnlyDictionary<string, TrafficEntry> _entries;
+    private static readonly (IReadOnlyList<string>, IReadOnlyList<string>) s_noRunways = (Array.Empty<string>(), Array.Empty<string>());
 
-    public TrafficSnapshot(IReadOnlyDictionary<string, TrafficEntry> entries)
+    private readonly IReadOnlyDictionary<string, TrafficEntry> _entries;
+    private readonly IReadOnlyDictionary<string, (IReadOnlyList<string> Arrivals, IReadOnlyList<string> Departures)> _runways;
+
+    public TrafficSnapshot(
+        IReadOnlyDictionary<string, TrafficEntry> entries,
+        IReadOnlyDictionary<string, (IReadOnlyList<string> Arrivals, IReadOnlyList<string> Departures)>? runways = null)
     {
         _entries = entries;
+        _runways = runways ?? new Dictionary<string, (IReadOnlyList<string>, IReadOnlyList<string>)>();
     }
+
+    /// <summary>
+    /// Gets an airport's active arrival and departure runways, as the client's runway configuration holds them.
+    /// </summary>
+    public (IReadOnlyList<string> Arrivals, IReadOnlyList<string> Departures) ActiveRunways(string icao) =>
+        _runways.TryGetValue(icao, out (IReadOnlyList<string> Arrivals, IReadOnlyList<string> Departures) runways) ? runways : s_noRunways;
 
     /// <summary>
     /// Gets an empty snapshot, for a client that is not connected.
@@ -46,8 +67,20 @@ internal sealed class TrafficSnapshot
     /// <summary>
     /// Reads every flight plan and controller data record from the client.
     /// </summary>
-    public static TrafficSnapshot Read(IFlightplanApi flightplans, IControllerDataApi controllerData)
+    public static TrafficSnapshot Read(IFlightplanApi flightplans, IControllerDataApi controllerData, IAircraftApi? aircraft = null, IAirportApi? airports = null)
     {
+        Dictionary<string, (double, double)> positions = new(StringComparer.OrdinalIgnoreCase);
+        foreach (Aircraft target in aircraft?.GetAll() ?? Array.Empty<Aircraft>())
+        {
+            positions[target.Callsign] = (target.Position.Latitude, target.Position.Longitude);
+        }
+
+        Dictionary<string, (IReadOnlyList<string>, IReadOnlyList<string>)> runways = new(StringComparer.OrdinalIgnoreCase);
+        foreach (AirportConfig config in airports?.GetConfigurations() ?? Array.Empty<AirportConfig>())
+        {
+            runways[config.Icao] = (config.ArrRunways.ToList(), config.DepRunways.ToList());
+        }
+
         Dictionary<string, GroundStatus> statuses = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, string> scratchpads = new(StringComparer.OrdinalIgnoreCase);
         foreach (ControllerDataModel data in controllerData.GetAll())
@@ -68,7 +101,11 @@ internal sealed class TrafficSnapshot
                 sid,
                 plan.WakeCategory,
                 plan.Eobt,
-                scratchpads.GetValueOrDefault(plan.Callsign) ?? string.Empty);
+                scratchpads.GetValueOrDefault(plan.Callsign) ?? string.Empty)
+            {
+                Latitude = positions.TryGetValue(plan.Callsign, out (double Lat, double Lon) at) ? at.Lat : null,
+                Longitude = positions.TryGetValue(plan.Callsign, out (double Lat, double Lon) at2) ? at2.Lon : null,
+            };
         }
 
         foreach (KeyValuePair<string, GroundStatus> status in statuses)
@@ -76,7 +113,7 @@ internal sealed class TrafficSnapshot
             entries.TryAdd(status.Key, s_unknown with { GroundStatus = status.Value, Scratchpad = scratchpads[status.Key] });
         }
 
-        return new TrafficSnapshot(entries);
+        return new TrafficSnapshot(entries, runways);
     }
 
     /// <summary>

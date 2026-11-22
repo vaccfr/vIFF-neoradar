@@ -7,41 +7,41 @@ using NeoRadar.PluginSdk.Logger;
 namespace Viff.NeoRadar.Viff;
 
 /// <summary>
-/// Reads the vACC's CDM configuration files (event slots, and later rates and taxi zones) over HTTPS.
+/// Downloads the text files a vACC's CDMconfig.xml points at (rates, taxi zones, event slots, SID intervals).
 /// </summary>
 internal interface IRemoteText
 {
     /// <summary>
     /// Gets a file's text, or null when it could not be read, already logged.
     /// </summary>
-    Task<string?> GetAsync(string fileName, CancellationToken cancellationToken);
+    Task<string?> GetAsync(Uri url, CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// Reads files under one base URL, by default the French vACC's public vIFF-CDM repository the CDM plugin reads.
+/// Downloads text over HTTP(S), refusing anything over 4 MB.
 /// </summary>
 internal sealed class RemoteText : IRemoteText, IDisposable
 {
-    public const string DefaultBaseUrl = "https://raw.githubusercontent.com/vaccfr/vIFF-CDM/refs/heads/main/";
+    private const long MaxBytes = 4 * 1024 * 1024;
 
     private readonly HttpClient _http;
     private readonly ILoggerApi _logger;
 
-    public RemoteText(Uri baseAddress, string userAgent, ILoggerApi logger)
+    public RemoteText(string userAgent, ILoggerApi logger)
     {
         _logger = logger;
-        _http = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15), MaxResponseContentBufferSize = MaxBytes };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
     }
 
-    public async Task<string?> GetAsync(string fileName, CancellationToken cancellationToken)
+    public async Task<string?> GetAsync(Uri url, CancellationToken cancellationToken)
     {
         try
         {
-            using HttpResponseMessage response = await _http.GetAsync(fileName, cancellationToken).ConfigureAwait(false);
+            using HttpResponseMessage response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                _logger.Warning($"Could not read {fileName}: HTTP {(int)response.StatusCode}");
+                _logger.Warning($"Could not download {url}: HTTP {(int)response.StatusCode}");
                 return null;
             }
 
@@ -51,9 +51,9 @@ internal sealed class RemoteText : IRemoteText, IDisposable
         {
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
         {
-            _logger.Warning($"Could not read {fileName}: {ex.Message}");
+            _logger.Warning($"Could not download {url}: {ex.Message}");
             return null;
         }
     }

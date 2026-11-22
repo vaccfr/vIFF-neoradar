@@ -63,7 +63,7 @@ public sealed class StepTwoBehaviourTests
         StripWriter strips = new(new StripStore(client), client, new FakeLogger());
         JobScheduler scheduler = new(_clock, new FakeLogger());
         FlightActions actions = new(_api, _store, new ConnectionGate(FakeFsd.LiveAtc(Me)), scheduler, new Notifier(new FakeChat(), new FakeFeedback()),
-            _clock, () => { }, strips, _controls, _slots, readySetTsac: true);
+            _clock, () => { }, strips, _controls, _slots, readySetTsac: () => true);
 
         actions.SetTsac("AFR1", null);
         Assert.Equal("1215", strips.Current("AFR1")[StripData.Tsac]);

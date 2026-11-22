@@ -9,8 +9,27 @@ and your vACC's procedures. This page covers only what is specific to NeoRadar.
 
 ## Installing
 
-Add `Viff.NeoRadar.dll` (from the latest CI run, or a local build) in Plugin Management, or list it in a package's
-`plugins`. Then bind the items below in your package; `Package/` beside the DLL holds an example list and label items.
+Add `Viff.NeoRadar.dll` (from the latest CI run, or a local build) in Plugin Management, or ship it in a package as a
+`.nrplugin` (see the API key section). Then bind the items below in your package; `Package/` beside the DLL holds an
+example list and label items. The plugin is one managed assembly, so the same build runs on Windows, macOS and Linux;
+the packed `.nrplugin` carries it for all three.
+
+## CDM configuration
+
+The plugin reads the CDM plugin's own `CDMconfig.xml`, so a vACC ships the file it already has. It looks, first found:
+
+1. in the package, `cdm/CDMconfig.xml` (the package's root, beside `manifest.json`);
+2. in the controller's NeoRadar folder, `Documents/NeoRadar/vIFF CDM/CDMconfig.xml`.
+
+As in the CDM plugin, the `url` of `Rates`, `Taxizones`, `Slots` and `sidInterval` is downloaded (and the last copy
+kept under `Documents/NeoRadar/vIFF CDM/cache` for when the download fails), and a blank `url` reads `rate.txt`,
+`taxizones.txt`, `ctot.txt` or `sidInterval.txt` from beside `CDMconfig.xml`. The setup reloads every 30 minutes,
+when the package changes, and with `.cdm reload`; event slots every 5 minutes. The options read are `rate`, `rateLvo`,
+`DefaultTaxiTime`, `DeIceTimes`, `DeIceRemTaxi`, `bmi`, `invalidateAtTsat`, `readySetTsac`,
+`reqTobtPriority` and `eventPriority`; they and the files work as in the CDM plugin. A line the plugin cannot read is
+skipped and logged. Without a `CDMconfig.xml` the plugin sequences on vIFF's rates and taxi times.
+
+A departure's rate is, first found: `.cdm rate`, the `rate.txt` line of its runway, vIFF's rate, then `rate`.
 
 ## What is different on NeoRadar
 
@@ -24,9 +43,8 @@ Add `Viff.NeoRadar.dll` (from the latest CI run, or a local build) in Plugin Man
 - **Slave actions are requests.** A controller who is not master sends TOBT and start-up changes as the requests the
   CDM plugin's master applies (`REQTOBT`, `REQASRT`), so a NeoRadar slave works with a EuroScope master and the other
   way round. At an airport with no master, changes are written directly.
-- **No configuration files.** Departure rates, taxi times and the list of CDM airports come from vIFF's CAD; runways,
-  SIDs, ground status and wake categories come from NeoRadar. `.cdm rate` and `.cdm deicepads` override what vIFF
-  lacks (LVO rates, remote de-icing pads).
+- **Configuration from the package.** `CDMconfig.xml` comes with the package instead of the plugin folder (see above);
+  runways, SIDs, ground status, positions and wake categories come from NeoRadar.
 - **Suspensions are read back from vIFF.** An `FLS-CDM` suspension the master sets (`SUSP`) is taken from vIFF, so it
   survives a master restart or handover.
 - **CTOTs of every flight.** vIFF's network-wide CTOT list is read each cycle, so any flight the client holds shows
@@ -73,25 +91,22 @@ Expressions for package conditions: `EXP_Listed` (a departure from one of your a
 
 ## Commands
 
-`.cdm master`, `slave`, `startupdelay`, `departuredelay`, `lvo`, `remarks`, `rmkctot`, `recover`, `refresh` and `help`
-work as in the CDM plugin. `recover` and `refresh` read vIFF again. NeoRadar adds:
+`.cdm master`, `slave`, `startupdelay`, `departuredelay`, `lvo`, `remarks`, `rmkctot`, `recover`, `refresh`, `reload`
+and `help` work as in the CDM plugin. `recover` and `refresh` read vIFF again. NeoRadar adds:
 
 | Command | Does |
 |---|---|
-| `.cdm rate ICAO NORMAL [LVO]` | Override vIFF's departure rate per hour, and set the LVO rate (0 returns to vIFF's) |
+| `.cdm rate ICAO NORMAL [LVO]` | Override the departure rate per hour, and the LVO rate (0 removes the override) |
 | `.cdm deicepads ICAO REM1=10,REM2=8` | Remote de-icing pads and their extra taxi minutes |
 | `.cdm panel` | Open the CDM Airport Panel |
 | `.cdm atfcm` | Open the ATFCM Flight List |
 | `.cdm apikey KEY` | Set the vIFF API key on this machine (`default` removes it) |
-| `.cdm status` | The master of each watched airport |
+| `.cdm status` | The CDM setup in use and the master of each watched airport |
 
 ## Not supported yet
 
 - **Sending the VDGS private message (MSG).** NeoRadar's SDK cannot send a private message, so `TAG_MSG` shows
   whether the pilot was informed but cannot inform them.
-- **Sequencing options from the vACC's files:** per-runway rates and dependent runways (`rate.txt`; this port runs
-  one queue per airport at vIFF's rate), taxi zones (and so EXOT for non-CDM airports), runway pressure, BMI and SID
-  intervals. Event slots (`ctot.txt`) are read already.
 - **The BMI and monitoring windows**, the commands `ctot`, `event`, `runwaypressure`, `realmode`, `refreshtime`,
   `resetmaster`, `nvo`, `server`, `save`, `load`, `data`, `debug`, and the FTP and VDGS file exports.
 - **ASAT** is the time this client saw start-up approved, as vIFF does not store it.
@@ -99,9 +114,9 @@ work as in the CDM plugin. `recover` and `refresh` read vIFF again. NeoRadar add
 ## Settings
 
 Optional plugin settings: `apiUrl` (default `https://viff-system.network/`), `apiKey`, `refreshSeconds` (default 15,
-at least 5), `cdmConfigUrl` (where the vACC's CDM files are read, by default the French vACC's
-`vaccfr/vIFF-CDM` repository the CDM plugin reads), `readySetTsac` (default true: Ready TOBT sets the TSAC to the TSAT
-once it is calculated) and `atfcmFilter` (the ATFCM list's last filter).
+at least 5), `readySetTsac` (`true` or `false`, overrides `CDMconfig.xml`) and `atfcmFilter` (the ATFCM list's last
+filter). The client log has a line for every state change, chat message, toast and command (never the API key);
+per-cycle detail is logged at Debug.
 
 ### The vIFF API key
 
@@ -128,5 +143,5 @@ dotnet build vIFF.NeoRadar.slnx -c Release
 dotnet test vIFF.NeoRadar.slnx -c Release --no-build
 ```
 
-The SDK is the `extern/plugin-sdk` submodule, pinned to `v0.1.0` and referenced compile-only.
+The SDK is the `extern/plugin-sdk` submodule, pinned to `v0.1.1` and referenced compile-only.
 `VIFF_LIVE_TESTS=1 dotnet test` also runs read-only checks against the live vIFF API.

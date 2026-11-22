@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NeoRadar.PluginSdk.Logger;
 using Viff.NeoRadar.Common;
+using Viff.NeoRadar.Config;
 using Viff.NeoRadar.Viff;
 
 namespace Viff.NeoRadar.Cdm;
@@ -21,22 +22,32 @@ internal sealed class MasterSequencing
     /// <summary>Gets how long after the TSAT an unstarted flight that has not reported ready loses its place.</summary>
     public static readonly TimeSpan TsatExpiry = TimeSpan.FromMinutes(6);
 
-    private const int DefaultTaxiMinutes = 15;
-
     private readonly IViffApi _api;
     private readonly CdmStore _store;
     private readonly AirportControls _controls;
     private readonly ILoggerApi _logger;
     private readonly Action<string> _notify;
     private readonly EventSlots? _slots;
+    private readonly Func<CdmSetup> _setup;
+
+    // Airport/runway to the rate.txt line last used, so a change of line is logged once.
+    private readonly Dictionary<string, string> _ratesInUse = new(StringComparer.OrdinalIgnoreCase);
 
     // Callsign to the TOBT ("HHMM") whose TSAT expired; the flight stays out of the sequence until its TOBT changes.
     private readonly Dictionary<string, string> _expired = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _warned = new(StringComparer.Ordinal);
 
-    public MasterSequencing(IViffApi api, CdmStore store, AirportControls controls, ILoggerApi logger, Action<string> notify, EventSlots? slots = null)
+    public MasterSequencing(
+        IViffApi api,
+        CdmStore store,
+        AirportControls controls,
+        ILoggerApi logger,
+        Action<string> notify,
+        EventSlots? slots = null,
+        Func<CdmSetup>? setup = null)
     {
         _slots = slots;
+        _setup = setup ?? (() => CdmSetup.None);
         _api = api;
         _store = store;
         _controls = controls;
@@ -53,26 +64,24 @@ internal sealed class MasterSequencing
             return;
         }
 
-        int rate = _controls.EffectiveRate(icao, airport.Capacity.Rate, out bool lvoRateMissing);
-        if (lvoRateMissing)
+        CdmSetup setup = _setup();
+        CdmConfig config = setup.Config;
+        bool lvo = _controls.IsLvo(icao);
+        int airportRate = AirportRate(icao, airport.Capacity.Rate, config, lvo);
+        if (airportRate <= 0 && !setup.Rates.Airports.Contains(icao))
         {
-            WarnOnce($"{icao}:lvo-rate", $"LVO is on for {icao} but no LVO rate is set; using {rate}/h. Set one with .cdm rate {icao} <normal> <lvo>.");
-        }
-
-        if (rate <= 0)
-        {
-            WarnOnce($"{icao}:no-rate", $"vIFF holds no departure rate for {icao}. Set one with .cdm rate {icao} <normal> <lvo>.");
+            WarnOnce($"{icao}:no-rate", $"No departure rate for {icao} in vIFF, rate.txt or CDMconfig.xml. Set one with .cdm rate {icao} <normal> <lvo>.");
             return;
         }
 
-        int defaultTaxi = airport.Capacity.TaxiMinutes > 0 ? airport.Capacity.TaxiMinutes : DefaultTaxiMinutes;
-        IReadOnlyList<(string Name, int ExtraTaxiMinutes)> pads = _controls.DeIcePads(icao);
+        int defaultTaxi = airport.Capacity.TaxiMinutes > 0 ? airport.Capacity.TaxiMinutes : config.DefaultTaxiMinutes;
+        PlanContext context = new(icao, setup, lvo, airportRate, defaultTaxi, traffic.ActiveRunways(icao));
 
         List<PlannedFlight> plans = new();
         List<SequenceInput> inputs = new();
         foreach (DepartureRecord record in _store.Departures(icao).Where(r => !r.IsAirborne))
         {
-            PlannedFlight? plan = Plan(record, traffic[record.Callsign], defaultTaxi, pads, now);
+            PlannedFlight? plan = Plan(record, traffic[record.Callsign], context, now);
             if (plan is null)
             {
                 continue;
@@ -85,8 +94,16 @@ internal sealed class MasterSequencing
             }
         }
 
+        SequenceRules rules = new()
+        {
+            DefaultRate = Math.Max(airportRate, 1),
+            EarliestTsatByRunway = _controls.StartupDelays(icao),
+            EarliestTtotByRunway = _controls.DepartureDelays(icao),
+            Bmi = config.Bmi,
+            SidInterval = setup.Intervals.Count == 0 ? null : (flight, other) => setup.Intervals.Between(icao, flight.Runway, flight.Sid, other.Runway, other.Sid),
+        };
         Dictionary<string, SequenceSlot> slots = Sequencer
-            .Build(inputs, rate, _controls.StartupDelays(icao), _controls.DepartureDelays(icao), now)
+            .Build(inputs, rules, now)
             .ToDictionary(s => s.Callsign, StringComparer.OrdinalIgnoreCase);
 
         int written = 0;
@@ -115,17 +132,55 @@ internal sealed class MasterSequencing
 
         if (written > 0 || failed > 0)
         {
-            _logger.Debug($"{icao}: sequenced {inputs.Count} flight(s) at {rate}/h, wrote {written}, {failed} failed");
+            _logger.Debug($"{icao}: sequenced {inputs.Count} of {plans.Count} flight(s){(config.Bmi ? " in BMI blocks" : string.Empty)}" +
+                          $"{(lvo ? " under LVO" : string.Empty)}, airport rate {airportRate}/h, wrote {written}, {failed} failed");
         }
     }
 
-    private PlannedFlight? Plan(
-        DepartureRecord record,
-        TrafficEntry traffic,
-        int defaultTaxi,
-        IReadOnlyList<(string Name, int ExtraTaxiMinutes)> pads,
-        DateTimeOffset now)
+    // The airport's rate when no rate.txt line applies: the controller's override, else vIFF's, else CDMconfig.xml's.
+    private int AirportRate(string icao, int viffRate, CdmConfig config, bool lvo)
     {
+        (int overrideNormal, int overrideLvo) = _controls.GetRates(icao);
+        int normal = overrideNormal > 0 ? overrideNormal : viffRate > 0 ? viffRate : config.Rate;
+        if (!lvo)
+        {
+            return normal;
+        }
+
+        int lvoRate = overrideLvo > 0 ? overrideLvo : config.RateLvo;
+        if (lvoRate > 0)
+        {
+            return lvoRate;
+        }
+
+        WarnOnce($"{icao}:lvo-rate", $"LVO is on for {icao} but no LVO rate is set; using {normal}/h. Set one with .cdm rate {icao} <normal> <lvo>.");
+        return normal;
+    }
+
+    // A flight's own rate: the controller's override wins, then the rate.txt line of its runway, then the airport rate.
+    private (int Rate, RunwayRate? Line) FlightRate(PlanContext context, string runway, string sid)
+    {
+        (int overrideNormal, int overrideLvo) = _controls.GetRates(context.Icao);
+        RunwayRate? line = context.Setup.Rates.Find(context.Icao, runway, sid, context.Runways.Arrivals, context.Runways.Departures);
+        int lineRate = line is null ? 0 : context.Lvo ? line.LvoRate : line.Rate;
+        int overrideRate = context.Lvo ? overrideLvo : overrideNormal;
+        int rate = overrideRate > 0 ? overrideRate : lineRate > 0 ? lineRate : context.AirportRate;
+
+        string key = $"{context.Icao}/{runway}";
+        string description = line is null ? $"no rate.txt line, {rate}/h" : $"rate.txt line {line.LineNumber}, {rate}/h";
+        if (!_ratesInUse.TryGetValue(key, out string? previous) || previous != description)
+        {
+            _ratesInUse[key] = description;
+            _logger.Info($"{key}{(context.Lvo ? " (LVO)" : string.Empty)}: {description}" +
+                         $"{(line is { Dependent.Count: > 0 } ? $", dependent {string.Join(",", line.Dependent)}" : string.Empty)}");
+        }
+
+        return (rate, line);
+    }
+
+    private PlannedFlight? Plan(DepartureRecord record, TrafficEntry traffic, PlanContext context, DateTimeOffset now)
+    {
+        CdmConfig config = context.Setup.Config;
         bool started = traffic.Started || record.Aobt.Length > 0;
         if (!started && record.Suspension.Length > 0 && !record.IsCdmSuspended)
         {
@@ -181,16 +236,29 @@ internal sealed class MasterSequencing
         }
 
         bool suspending = false;
-        if (!started && asrt.Length == 0 && tsatPast && !_expired.ContainsKey(record.Callsign))
+        bool invalidates = config.InvalidateAtTsat switch
+        {
+            TsatInvalidation.Never => false,
+            TsatInvalidation.Always => true,
+            _ => asrt.Length == 0,
+        };
+        if (!started && invalidates && tsatPast && !_expired.ContainsKey(record.Callsign))
         {
             _expired[record.Callsign] = tobtKey;
             suspending = !record.IsCdmSuspended;
         }
 
         bool excluded = !started && (_expired.ContainsKey(record.Callsign) || tobt.Value > now + TsatHorizon);
-        TimeSpan exot = TimeSpan.FromMinutes(Exot(record, traffic, defaultTaxi, pads));
+        TimeSpan exot = TimeSpan.FromMinutes(Exot(record, traffic, context));
+        (int rate, RunwayRate? line) = FlightRate(context, traffic.Runway, traffic.Sid);
+        int pressure = config.RunwayPressure < 0 ? 0 : line?.Pressure is int linePressure ? linePressure : config.RunwayPressure;
         DateTimeOffset? ctot = _controls.IsCtotIgnored(record.Callsign) ? null : CdmTime.ParseNear(record.EffectiveCtot, now);
         bool eventSlot = _slots?.Find(record.Cid, record.Callsign, record.Departure, record.Arrival).Length > 0;
+        if (!excluded && rate <= 0)
+        {
+            WarnOnce($"{context.Icao}/{traffic.Runway}:no-rate", $"No departure rate for {context.Icao} runway {traffic.Runway}; its flights are not sequenced.");
+            excluded = true;
+        }
         SequenceInput? input = excluded
             ? null
             : new SequenceInput(
@@ -202,23 +270,60 @@ internal sealed class MasterSequencing
                 started,
                 currentTsat,
                 currentTtot,
-                Priority: cdm.Confirmed || setBy is not null || asrt.Length > 0 || eventSlot);
+                Priority: asrt.Length > 0 || (config.ReqTobtPriority && (cdm.Confirmed || setBy is not null)) || (config.EventPriority && eventSlot))
+            {
+                Sid = traffic.Sid,
+                RatePerHour = rate,
+                Dependent = line?.Dependent ?? Array.Empty<string>(),
+                PressureMinutes = pressure,
+            };
 
         return new PlannedFlight(record, CdmTime.ToHhmmss(tobt.Value), asrt, setBy, clears, exot, started, excluded, suspending, lifting, input);
     }
 
-    private static int Exot(DepartureRecord record, TrafficEntry traffic, int defaultTaxi, IReadOnlyList<(string Name, int ExtraTaxiMinutes)> pads)
+    // The CDM plugin's EXOT: the taxi zone the aircraft stands in, else vIFF's taxi time, else the default; de-icing adds
+    // its time by wake, and a remote pad takes the zone's time via that pad when given, else the pad's extra minutes.
+    private int Exot(DepartureRecord record, TrafficEntry traffic, PlanContext context)
     {
-        int taxi = record.TaxiMinutes > 0 ? record.TaxiMinutes : defaultTaxi;
+        CdmConfig config = context.Setup.Config;
+        TaxiZone? zone = traffic.Latitude is double lat && traffic.Longitude is double lon && traffic.Runway.Length > 0
+            ? context.Setup.Zones.Find(context.Icao, traffic.Runway, lat, lon)
+            : null;
+        int taxi = zone?.TaxiMinutes ?? (record.TaxiMinutes > 0 ? record.TaxiMinutes : context.DefaultTaxi);
         if (record.Cdm.Deice.Length == 0)
         {
             return taxi;
         }
 
+        int deIce = config.DeIceMinutes.TryGetValue(traffic.WakeCategory, out int byWake) ? byWake : DeIce.MinutesFor(traffic.WakeCategory);
         string? pad = DeIce.RemotePad(record.Cdm.Deice);
-        int padTaxi = pad is null ? 0 : pads.FirstOrDefault(p => string.Equals(p.Name, pad, StringComparison.OrdinalIgnoreCase)).ExtraTaxiMinutes;
-        return taxi + padTaxi + DeIce.MinutesFor(traffic.WakeCategory);
+        if (pad is null)
+        {
+            return taxi + deIce;
+        }
+
+        int padIndex = config.RemotePads.ToList().FindIndex(p => string.Equals(p.Name, pad, StringComparison.OrdinalIgnoreCase));
+        if (zone is not null && padIndex >= 0 && padIndex < zone.RemoteTaxiMinutes.Count && zone.RemoteTaxiMinutes[padIndex] > 0)
+        {
+            return zone.RemoteTaxiMinutes[padIndex] + deIce;
+        }
+
+        int extra = _controls.DeIcePads(context.Icao).FirstOrDefault(p => string.Equals(p.Name, pad, StringComparison.OrdinalIgnoreCase)).ExtraTaxiMinutes;
+        if (extra == 0 && padIndex >= 0)
+        {
+            extra = config.RemotePads[padIndex].ExtraTaxiMinutes;
+        }
+
+        return taxi + extra + deIce;
     }
+
+    private sealed record PlanContext(
+        string Icao,
+        CdmSetup Setup,
+        bool Lvo,
+        int AirportRate,
+        int DefaultTaxi,
+        (IReadOnlyList<string> Arrivals, IReadOnlyList<string> Departures) Runways);
 
     // Returns true when written, false when a write failed, null when nothing needed writing.
     private async Task<bool?> WriteAsync(PlannedFlight plan, SequenceSlot? slot, TrafficEntry traffic, CancellationToken cancellationToken)

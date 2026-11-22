@@ -37,7 +37,11 @@ print("Key check: clean")
 PY
 
 mkdir -p "$stage/plugins/$name" "$out"
-cp "$stage/bin/Viff.NeoRadar.dll" "$stage/plugins/$name/windows.dll"
+# The plugin is one managed assembly with no native code, so the same file serves every platform. The archive keys
+# select the binary by platform; any architecture matches a bare platform key.
+for target in windows.dll mac.dylib linux.so; do
+  cp "$stage/bin/Viff.NeoRadar.dll" "$stage/plugins/$name/$target"
+done
 out="$(cd "$out" && pwd)"
 (cd "$stage" && $cli create-plugin-archives "$stage/plugins" -o "$out" --no-confirmation)
 echo "Packed $out/$name.nrplugin (no API key)"

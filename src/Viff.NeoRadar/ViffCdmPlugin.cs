@@ -15,6 +15,7 @@ using NeoRadar.PluginSdk.Window;
 using Viff.NeoRadar.Cdm;
 using Viff.NeoRadar.Commands;
 using Viff.NeoRadar.Common;
+using Viff.NeoRadar.Config;
 using Viff.NeoRadar.Panel;
 using Viff.NeoRadar.Strips;
 using Viff.NeoRadar.Tags;
@@ -67,7 +68,7 @@ public sealed class ViffCdmPlugin : BasePlugin
         _logger = coreApi.Logger;
         try
         {
-            Compose(coreApi);
+            Compose(coreApi, clientInfo);
         }
         catch (Exception ex)
         {
@@ -156,12 +157,14 @@ public sealed class ViffCdmPlugin : BasePlugin
 
     public override void OnFsdConnected(FsdConnectedEvent evt) => Guard(nameof(OnFsdConnected), () =>
     {
+        _logger?.Info("Connected to the network; reading vIFF now");
         _master?.NoteConnected();
         RequestSync();
     });
 
     public override void OnFsdDisconnected(FsdDisconnectedEvent evt) => Guard(nameof(OnFsdDisconnected), () =>
     {
+        _logger?.Info("Disconnected from the network; releasing any master role held");
         MasterRole? master = _master;
         _scheduler?.RunOnce("release on disconnect", ct => master?.ReleaseAllAsync(ct) ?? System.Threading.Tasks.Task.CompletedTask);
     });
@@ -181,7 +184,7 @@ public sealed class ViffCdmPlugin : BasePlugin
         _store.ObserveStartUp(evt.Callsign, data is not null && data.GroundStatus != GroundStatus.None, DateTimeOffset.UtcNow);
     });
 
-    private void Compose(ICoreApi core)
+    private void Compose(ICoreApi core, ClientInformation clientInfo)
     {
         TimeProvider clock = TimeProvider.System;
         ISettingsApi settings = core.Settings;
@@ -194,23 +197,29 @@ public sealed class ViffCdmPlugin : BasePlugin
         string apiKey = settingsKey ?? BuiltInApiKey;
         string keySource = settingsKey is not null ? "set with .cdm apikey" : BuildSecrets.ApiKey.Length > 0 ? "built in" : "placeholder, read only";
         int refreshSeconds = int.TryParse(settings.Get("refreshSeconds"), out int seconds) && seconds >= 5 ? seconds : DefaultRefreshSeconds;
-        Uri configUrl = ReadHttpsUrl(settings.Get("cdmConfigUrl"), RemoteText.DefaultBaseUrl, "cdmConfigUrl");
-        bool readySetTsac = !string.Equals(settings.Get("readySetTsac"), "false", StringComparison.OrdinalIgnoreCase);
+        string? readySetTsacSetting = settings.Get("readySetTsac");
 
         JobScheduler scheduler = new(clock, core.Logger);
         ViffApiClient api = new(apiUrl, apiKey, $"vIFF-neoradar/{PluginVersion}", core.Logger);
-        Notifier notifier = new(core.Chat, core.Feedback);
+        Notifier notifier = new(core.Chat, core.Feedback, core.Logger);
         ConnectionGate gate = new(core.Fsd);
         CdmStore store = new();
         AirportControls controls = new(settings);
-        RemoteText remote = new(configUrl, $"vIFF-neoradar/{PluginVersion}", core.Logger);
+        RemoteText remote = new($"vIFF-neoradar/{PluginVersion}", core.Logger);
         EventSlots slots = new();
+        ConfigLoader config = new(() => core.Package.GetPackagePath(), clientInfo.DocumentsPath, remote, slots, core.Logger);
+
+        // The readySetTsac setting, when set, overrides CDMconfig.xml's.
+        bool ReadySetTsac() => readySetTsacSetting is { Length: > 0 }
+            ? !string.Equals(readySetTsacSetting, "false", StringComparison.OrdinalIgnoreCase)
+            : config.Current.Config.ReadySetTsac;
         NetworkStatuses statuses = new();
         StripStore strips = new(core.ControllerData);
         StripWriter stripWriter = new(strips, core.ControllerData, core.Logger);
         StripSync stripSync = new(strips, stripWriter, core.ControllerData, notifier);
-        MasterSequencing sequencing = new(api, store, controls, core.Logger, message => notifier.Say(message), slots);
-        CdmSync sync = new(api, store, controls, sequencing, gate, core.Airport, core.Flightplan, core.ControllerData, clock, remote, slots, statuses);
+        MasterSequencing sequencing = new(api, store, controls, core.Logger, message => notifier.Say(message), slots, () => config.Current);
+        CdmSync sync = new(api, store, controls, sequencing, gate, core.Airport, core.Flightplan, core.ControllerData, clock,
+            config, statuses, core.Aircraft, core.Logger);
         TagPublisher publisher = new(core.Tag.GetInterface(), core.Expressions, core.Logger);
 
         FlightExtras ExtrasOf(FlightView flight) => new(
@@ -236,7 +245,7 @@ public sealed class ViffCdmPlugin : BasePlugin
             RequestSync();
         }
 
-        FlightActions actions = new(api, store, gate, scheduler, notifier, clock, Changed, stripWriter, controls, slots, readySetTsac);
+        FlightActions actions = new(api, store, gate, scheduler, notifier, clock, Changed, stripWriter, controls, slots, ReadySetTsac);
         MasterRole master = new(api, store, sync, gate, scheduler, notifier, Changed);
         AirportPanel panel = new(core.Window.GetInterface(), store, sync, controls, master, gate, notifier);
         AtfcmList atfcm = new(core.Window.GetInterface(), api, core.Focus, settings, gate, scheduler);
@@ -254,7 +263,7 @@ public sealed class ViffCdmPlugin : BasePlugin
             }
 
             api.SetApiKey(key ?? BuiltInApiKey);
-        }, atfcm.Open);
+        }, atfcm.Open, () => config.Current, () => config.SearchFolders, sync.RequestConfigReload, core.Logger);
 
         publisher.Register();
         tagMenus.Register();
@@ -320,7 +329,8 @@ public sealed class ViffCdmPlugin : BasePlugin
         });
         scheduler.Every("atfcm", TimeSpan.FromMinutes(1), ct => atfcm.IsOpen ? atfcm.RefreshAsync(ct) : System.Threading.Tasks.Task.CompletedTask);
 
-        core.Logger.Info($"vIFF CDM {PluginVersion} reading {apiUrl} every {refreshSeconds} s, API key {keySource}");
+        core.Logger.Info($"vIFF CDM {PluginVersion} reading {apiUrl} every {refreshSeconds} s, API key {keySource}; " +
+                         $"CDMconfig.xml looked for in {string.Join(" then ", config.SearchFolders)}");
     }
 
     private static IReadOnlyList<FlightView> AllFlights(CdmStore store, CdmSync sync) =>
@@ -334,23 +344,6 @@ public sealed class ViffCdmPlugin : BasePlugin
         {
             _strips?.Refresh(callsign);
         }
-    }
-
-    private Uri ReadHttpsUrl(string? configured, string fallback, string setting)
-    {
-        if (!string.IsNullOrWhiteSpace(configured) &&
-            Uri.TryCreate(configured.EndsWith('/') ? configured : configured + "/", UriKind.Absolute, out Uri? uri) &&
-            uri.Scheme == Uri.UriSchemeHttps)
-        {
-            return uri;
-        }
-
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            _logger?.Warning($"Ignoring the {setting} setting '{configured}'; it must be an https URL");
-        }
-
-        return new Uri(fallback);
     }
 
     private void RequestSync()

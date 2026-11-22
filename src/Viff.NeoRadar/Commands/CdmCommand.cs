@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using NeoRadar.PluginSdk.Chat;
+using NeoRadar.PluginSdk.Logger;
 using Viff.NeoRadar.Cdm;
 using Viff.NeoRadar.Common;
+using Viff.NeoRadar.Config;
 using Viff.NeoRadar.Panel;
 
 namespace Viff.NeoRadar.Commands;
@@ -17,7 +19,7 @@ internal sealed class CdmCommand : ICommandProvider
     private static readonly string[] s_subcommands =
     {
         "master", "slave", "startupdelay", "departuredelay", "lvo", "rate", "deicepads",
-        "remarks", "rmkctot", "recover", "refresh", "panel", "atfcm", "status", "apikey", "help",
+        "remarks", "rmkctot", "recover", "refresh", "reload", "panel", "atfcm", "status", "apikey", "help",
     };
 
     private static readonly string[] s_help =
@@ -27,13 +29,14 @@ internal sealed class CdmCommand : ICommandProvider
         ".cdm startupdelay ICAO/RWY HHMM - no TSAT before that time (MM for now + minutes, 9999 removes it)",
         ".cdm departuredelay ICAO/RWY HHMM - no TTOT before that time (MM for now + minutes, 9999 removes it)",
         ".cdm lvo [ICAO] - switch low-visibility operations, and so the LVO rate, on or off",
-        ".cdm rate ICAO NORMAL [LVO] - override vIFF's departure rate per hour (0 returns to vIFF's)",
+        ".cdm rate ICAO NORMAL [LVO] - override the departure rate per hour of rate.txt or vIFF (0 removes the override)",
         ".cdm deicepads ICAO REM1=10,REM2=8 - remote de-icing pads and their extra taxi minutes",
         ".cdm remarks / .cdm rmkctot - write the TSAT / CTOT (.CHHMM) into the scratchpad",
         ".cdm recover ICAO - read the airport's CDM data from vIFF again",
+        ".cdm reload - read CDMconfig.xml, rates, taxi zones, SID intervals and event slots again",
         ".cdm panel - open the CDM Airport Panel",
         ".cdm atfcm - open the ATFCM Flight List",
-        ".cdm status - show the master of each watched airport",
+        ".cdm status - show the CDM setup in use and the master of each watched airport",
         ".cdm apikey KEY - set the vIFF API key writes need (.cdm apikey default returns to the one built in, if any)",
     };
 
@@ -48,6 +51,10 @@ internal sealed class CdmCommand : ICommandProvider
     private readonly Action _requestSync;
     private readonly Action<string?> _setApiKey;
     private readonly Action _openAtfcm;
+    private readonly Func<CdmSetup> _setup;
+    private readonly Func<IReadOnlyList<string>> _searchFolders;
+    private readonly Action _reloadConfig;
+    private readonly ILoggerApi? _logger;
 
     public CdmCommand(
         CdmStore store,
@@ -60,9 +67,17 @@ internal sealed class CdmCommand : ICommandProvider
         TimeProvider clock,
         Action requestSync,
         Action<string?> setApiKey,
-        Action? openAtfcm = null)
+        Action? openAtfcm = null,
+        Func<CdmSetup>? setup = null,
+        Func<IReadOnlyList<string>>? searchFolders = null,
+        Action? reloadConfig = null,
+        ILoggerApi? logger = null)
     {
+        _logger = logger;
         _openAtfcm = openAtfcm ?? (() => { });
+        _setup = setup ?? (() => CdmSetup.None);
+        _searchFolders = searchFolders ?? Array.Empty<string>;
+        _reloadConfig = reloadConfig ?? (() => { });
         _store = store;
         _sync = sync;
         _controls = controls;
@@ -76,7 +91,7 @@ internal sealed class CdmCommand : ICommandProvider
     }
 
     public static CommandDefinition Definition { get; } = new(
-        "vIFF CDM: master, slave, startupdelay, departuredelay, lvo, rate, deicepads, remarks, rmkctot, recover, refresh, panel, atfcm, status, apikey, help",
+        "vIFF CDM: master, slave, startupdelay, departuredelay, lvo, rate, deicepads, remarks, rmkctot, recover, refresh, reload, panel, atfcm, status, apikey, help",
         new[]
         {
             new CommandParameter("action", ParameterType.String, Required: true, AllowedValues: s_subcommands),
@@ -87,6 +102,17 @@ internal sealed class CdmCommand : ICommandProvider
 
     // Client threads.
     public CommandResult Execute(string commandId, IReadOnlyList<string> args)
+    {
+        // The API key is never logged.
+        string shown = args.Count > 0 && string.Equals(args[0], "apikey", StringComparison.OrdinalIgnoreCase)
+            ? args.Count > 1 && string.Equals(args[1].Trim(), "default", StringComparison.OrdinalIgnoreCase) ? "apikey default" : "apikey (hidden)"
+            : string.Join(' ', args.Where(a => a.Length > 0));
+        CommandResult result = Run(args);
+        _logger?.Info($".cdm {shown}: {(result.Success ? "done" : "refused")}{(result.Message is { Length: > 0 } m ? $" - {m}" : string.Empty)}");
+        return result;
+    }
+
+    private CommandResult Run(IReadOnlyList<string> args)
     {
         string action = args.Count > 0 ? args[0].ToLowerInvariant() : "help";
         string rawFirst = args.Count > 1 ? args[1].Trim() : string.Empty;
@@ -156,6 +182,11 @@ internal sealed class CdmCommand : ICommandProvider
             case "refresh":
                 _requestSync();
                 return Ok("Reading vIFF now.");
+
+            case "reload":
+                _reloadConfig();
+                _requestSync();
+                return Ok("Reading the CDM setup again; .cdm status shows what was loaded.");
 
             case "panel":
                 _panel.Open();
@@ -266,6 +297,10 @@ internal sealed class CdmCommand : ICommandProvider
     private void SayStatus()
     {
         string me = _gate.Callsign;
+        CdmSetup setup = _setup();
+        _notifier.Say(setup.Loaded
+            ? $"CDM setup: {setup.Source}; {setup.Rates.Count} rate line(s), {setup.Zones.Count} taxi zone(s), {setup.Intervals.Count} SID interval(s)"
+            : $"CDM setup: no CDMconfig.xml in {string.Join(" or ", _searchFolders())}; vIFF's rates and taxi times apply");
         IReadOnlyList<AirportView> airports = _store.Airports(_sync.WatchedAirports());
         if (airports.Count == 0)
         {

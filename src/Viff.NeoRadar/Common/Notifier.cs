@@ -1,10 +1,12 @@
 using NeoRadar.PluginSdk.Chat;
 using NeoRadar.PluginSdk.Feedback;
+using NeoRadar.PluginSdk.Logger;
 
 namespace Viff.NeoRadar.Common;
 
 /// <summary>
-/// Tells the controller what happened: a line in the plugin's own chat channel, or a toast.
+/// Tells the controller what happened: a line in the plugin's own chat channel, or a toast. Each is logged too, so the
+/// log tells what the controller saw.
 /// </summary>
 internal sealed class Notifier
 {
@@ -12,12 +14,14 @@ internal sealed class Notifier
 
     private readonly IChatApi _chat;
     private readonly IFeedbackApi _feedback;
+    private readonly ILoggerApi? _logger;
     private volatile bool _muted;
 
-    public Notifier(IChatApi chat, IFeedbackApi feedback)
+    public Notifier(IChatApi chat, IFeedbackApi feedback, ILoggerApi? logger = null)
     {
         _chat = chat;
         _feedback = feedback;
+        _logger = logger;
     }
 
     /// <summary>
@@ -32,6 +36,15 @@ internal sealed class Notifier
     {
         if (!_muted)
         {
+            if (urgent)
+            {
+                _logger?.Warning($"Chat: {message}");
+            }
+            else
+            {
+                _logger?.Info($"Chat: {message}");
+            }
+
             _chat.SendClientMessage(new ClientTextMessageEvent("vIFF", message, IsUrgent: urgent, Channel: Channel));
         }
     }
@@ -43,6 +56,15 @@ internal sealed class Notifier
     {
         if (!_muted)
         {
+            if (kind is FeedbackKind.Warning or FeedbackKind.Error)
+            {
+                _logger?.Warning($"Toast: {message}");
+            }
+            else
+            {
+                _logger?.Info($"Toast: {message}");
+            }
+
             _feedback.Show(message, kind, 3000);
         }
     }
