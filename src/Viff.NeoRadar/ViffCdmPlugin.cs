@@ -29,9 +29,9 @@ public sealed class ViffCdmPlugin : BasePlugin
     private const string PluginVersion = "0.1.0-alpha";
     private const string DefaultApiUrl = "https://viff-system.network/";
 
-    // The placeholder key in the open-source EuroScope CDM plugin: vIFF reads accept it, writes refuse it (401), so
-    // a controller who writes sets the real key with .cdm apikey.
-    private const string DefaultApiKey = "TEST";
+    // The placeholder key in the open-source EuroScope CDM plugin: vIFF reads accept it, writes refuse it (401). It
+    // applies when the build carries no key (BuildSecrets, from .env) and the controller set none with .cdm apikey.
+    private const string PlaceholderApiKey = "TEST";
     private const int DefaultRefreshSeconds = 15;
 
     private ILoggerApi? _logger;
@@ -161,7 +161,9 @@ public sealed class ViffCdmPlugin : BasePlugin
         _menu = core.Menu;
 
         Uri apiUrl = ReadApiUrl(settings.Get("apiUrl"));
-        string apiKey = settings.Get("apiKey") is { Length: > 0 } key ? key : DefaultApiKey;
+        string? settingsKey = settings.Get("apiKey") is { Length: > 0 } key ? key : null;
+        string apiKey = settingsKey ?? BuiltInApiKey;
+        string keySource = settingsKey is not null ? "set with .cdm apikey" : BuildSecrets.ApiKey.Length > 0 ? "built in" : "placeholder, read only";
         int refreshSeconds = int.TryParse(settings.Get("refreshSeconds"), out int seconds) && seconds >= 5 ? seconds : DefaultRefreshSeconds;
 
         JobScheduler scheduler = new(clock, core.Logger);
@@ -201,7 +203,7 @@ public sealed class ViffCdmPlugin : BasePlugin
                 settings.Set("apiKey", key);
             }
 
-            api.SetApiKey(key ?? DefaultApiKey);
+            api.SetApiKey(key ?? BuiltInApiKey);
         });
 
         publisher.Register();
@@ -239,11 +241,13 @@ public sealed class ViffCdmPlugin : BasePlugin
             return System.Threading.Tasks.Task.CompletedTask;
         });
 
-        core.Logger.Info($"vIFF CDM {PluginVersion} reading {apiUrl} every {refreshSeconds} s");
+        core.Logger.Info($"vIFF CDM {PluginVersion} reading {apiUrl} every {refreshSeconds} s, API key {keySource}");
     }
 
     private static IReadOnlyList<FlightView> AllFlights(CdmStore store, CdmSync sync) =>
         store.Flights().Concat(store.NetworkFlights(sync.LatestTraffic)).ToList();
+
+    private static string BuiltInApiKey => BuildSecrets.ApiKey.Length > 0 ? BuildSecrets.ApiKey : PlaceholderApiKey;
 
     private void RequestSync()
     {

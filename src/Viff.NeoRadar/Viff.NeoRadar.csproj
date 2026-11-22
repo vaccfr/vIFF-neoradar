@@ -19,4 +19,44 @@
     <!-- The example package fragment travels beside the built plugin for a package author to copy. -->
     <None Include="Package\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!--
+    The vIFF API key built into the plugin: the VIFF_API_KEY environment variable, else VIFF_API_KEY=... in the
+    gitignored .env at the repository root, else none. -p:ViffEmbedKey=false builds without it, which every build for
+    a published package must (scripts/pack-nrplugin.sh does). A key in a DLL can be read back out of it.
+  -->
+  <PropertyGroup>
+    <ViffEmbedKey Condition="'$(ViffEmbedKey)' == ''">true</ViffEmbedKey>
+    <ViffEnvFile>$(MSBuildThisFileDirectory)..\..\.env</ViffEnvFile>
+  </PropertyGroup>
+
+  <Target Name="ViffGenerateBuildKey" BeforeTargets="CoreCompile">
+    <!-- Set here, not above: the intermediate folder is only known once the SDK targets have run, and the generated
+         file holds the key, so it must land in obj/, never beside the sources. -->
+    <PropertyGroup>
+      <ViffBuildKeyFile>$(ProjectDir)$(IntermediateOutputPath)ViffBuildKey.g.cs</ViffBuildKeyFile>
+    </PropertyGroup>
+    <Error Text="The generated key file must be under obj/: $(ViffBuildKeyFile)" Condition="!$(ViffBuildKeyFile.Contains('obj'))" />
+    <ReadLinesFromFile File="$(ViffEnvFile)" Condition="'$(ViffEmbedKey)' == 'true' And '$(VIFF_API_KEY)' == '' And Exists('$(ViffEnvFile)')">
+      <Output TaskParameter="Lines" ItemName="_ViffEnvLine" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <_ViffKeyLine Include="@(_ViffEnvLine)" Condition="$([System.String]::Copy('%(Identity)').Trim().StartsWith('VIFF_API_KEY='))" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_ViffKey Condition="'$(ViffEmbedKey)' == 'true' And '$(VIFF_API_KEY)' != ''">$(VIFF_API_KEY)</_ViffKey>
+      <_ViffKey Condition="'$(ViffEmbedKey)' == 'true' And '$(VIFF_API_KEY)' == ''">@(_ViffKeyLine->'%(Identity)')</_ViffKey>
+      <_ViffKey>$([System.String]::Copy('$(_ViffKey)').Trim())</_ViffKey>
+      <_ViffKey Condition="$(_ViffKey.StartsWith('VIFF_API_KEY='))">$(_ViffKey.Substring(13).Trim())</_ViffKey>
+      <_ViffKey>$(_ViffKey.Replace('"', '').Replace("'", '').Replace('\', ''))</_ViffKey>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(ViffBuildKeyFile)" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="namespace Viff.NeoRadar.Common { internal static class BuildSecrets { public const string ApiKey = &quot;$(_ViffKey)&quot;%3B } }" />
+    <ItemGroup>
+      <Compile Include="$(ViffBuildKeyFile)" />
+      <FileWrites Include="$(ViffBuildKeyFile)" />
+    </ItemGroup>
+    <Message Importance="high" Text="vIFF API key: $(_ViffKey.Length) characters built in" Condition="'$(_ViffKey)' != ''" />
+    <Message Importance="high" Text="vIFF API key: none built in" Condition="'$(_ViffKey)' == ''" />
+  </Target>
 </Project>

@@ -79,8 +79,22 @@ work as in the CDM plugin. `recover` and `refresh` read vIFF again. NeoRadar add
 Optional plugin settings: `apiUrl` (default `https://viff-system.network/`), `apiKey` and `refreshSeconds`
 (default 15, at least 5).
 
-vIFF issues no per-user keys today. The plugin sends the key the CDM plugin sends, `TEST`. Reads do not check the
-key; vIFF's API description declares it for every endpoint, so writes may. Ask the vIFF team before using another.
+### The vIFF API key
+
+Reads need no key; every write (master, TOBT, RDY, REA) does, and vIFF issues it to the plugin, not per controller.
+The plugin uses, first found:
+
+1. the key set in NeoRadar with `.cdm apikey KEY` (`.cdm apikey default` removes it);
+2. the key built in: `VIFF_API_KEY` from the environment, or `VIFF_API_KEY=...` in a `.env` file at the repository
+   root, which is gitignored;
+3. the CDM plugin's placeholder `TEST`, which reads only.
+
+The startup log line says which one is in use, never the key. A key built into a DLL can be read back out of it, so
+a key-carrying build is for local or private use only. **A plugin for a published package is packed without a key:**
+
+```bash
+scripts/pack-nrplugin.sh <package>/plugins          # builds keyless, checks the DLL holds no .env key, packs it
+```
 
 ## Building
 

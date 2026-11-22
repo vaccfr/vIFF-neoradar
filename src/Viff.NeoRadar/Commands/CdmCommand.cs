@@ -33,7 +33,7 @@ internal sealed class CdmCommand : ICommandProvider
         ".cdm recover ICAO - read the airport's CDM data from vIFF again",
         ".cdm panel - open the CDM Airport Panel",
         ".cdm status - show the master of each watched airport",
-        ".cdm apikey KEY - set the vIFF API key writes need (.cdm apikey default returns to the built-in one)",
+        ".cdm apikey KEY - set the vIFF API key writes need (.cdm apikey default returns to the one built in, if any)",
     };
 
     private readonly CdmStore _store;
