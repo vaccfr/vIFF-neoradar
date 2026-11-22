@@ -69,7 +69,8 @@ internal sealed class TagPublisher
         }
 
         _isCdmId = Declare(ExpressionDefinition.Boolean("Is CDM", false, "The departure airport runs CDM on vIFF"));
-        _listedId = Declare(ExpressionDefinition.Boolean("Listed", false, "A departure from a watched airport, not yet airborne"));
+        _listedId = Declare(ExpressionDefinition.Boolean("Listed", false,
+            "A departure from one of the client's airports, not yet airborne; false for flights from elsewhere"));
         _readyId = Declare(ExpressionDefinition.Boolean("Ready", false, "RDY is set"));
         _hasCtotId = Declare(ExpressionDefinition.Boolean("Has CTOT", false, "The flight has an ATFCM or manual CTOT"));
         _informedId = Declare(ExpressionDefinition.Boolean("Informed", false, "The pilot was sent the VDGS message"));
@@ -97,7 +98,7 @@ internal sealed class TagPublisher
                     PushItem(_itemIds[item.Key], callsign, item.Value);
                 }
 
-                PushExpression(_listedId, callsign, true);
+                PushExpression(_listedId, callsign, flight.Watched);
                 PushExpression(_isCdmId, callsign, tags.IsCdm);
                 PushExpression(_readyId, callsign, tags.Ready);
                 PushExpression(_hasCtotId, callsign, tags.HasCtot);

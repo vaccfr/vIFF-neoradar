@@ -67,6 +67,26 @@ public sealed class ViffJsonTests
         Assert.Equal(new[] { new MasterAirport("LFPG", "LFPG_DEL") }, ViffJson.ParseMasters(json));
     }
 
+    [Fact]
+    public void ParseRestricted_KeepsFlightsWithACtot()
+    {
+        const string json = """
+            [{"callsign":"KLM54G","ctot":"1605","etot":"1537","atot":"","mostPenalizingAirspace":"","mostPenalisingRegulation":"","cdmSts":""},
+             {"callsign":"EJU75VY","ctot":"1605","atot":"","mostPenalizingAirspace":"LEBL","mostPenalisingRegulation":"","cdmSts":"REA"},
+             {"callsign":"BAD","ctot":"","atot":""}]
+            """;
+
+        IReadOnlyList<RestrictedFlight>? flights = ViffJson.ParseRestricted(json);
+
+        Assert.Equal(
+            new[]
+            {
+                new RestrictedFlight("KLM54G", "1605", string.Empty, string.Empty, string.Empty),
+                new RestrictedFlight("EJU75VY", "1605", "LEBL", string.Empty, "REA"),
+            },
+            flights);
+    }
+
     [Theory]
     [InlineData("true", true)]
     [InlineData("true\n", true)]

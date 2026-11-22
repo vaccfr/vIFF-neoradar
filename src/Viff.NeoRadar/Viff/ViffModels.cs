@@ -99,6 +99,16 @@ internal sealed record DepartureRecord
 internal sealed record AirportCapacity(string Icao, int Rate, int TaxiMinutes, bool IsCdm);
 
 /// <summary>
+/// Represents one regulated flight from vIFF's network-wide <c>/etfms/restricted</c> list.
+/// </summary>
+/// <param name="Callsign">The flight's callsign.</param>
+/// <param name="Ctot">The CTOT, "HHMM".</param>
+/// <param name="Regulation">The most penalising regulation, or empty when vIFF names none.</param>
+/// <param name="Atot">The actual take-off time, "HHMM", or empty while on the ground.</param>
+/// <param name="CdmStatus">The network status, such as COMPLY or REA.</param>
+internal sealed record RestrictedFlight(string Callsign, string Ctot, string Regulation, string Atot, string CdmStatus);
+
+/// <summary>
 /// Represents the controller position vIFF lists as CDM master of an airport.
 /// </summary>
 internal sealed record MasterAirport(string Icao, string Position);

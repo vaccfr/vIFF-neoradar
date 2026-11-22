@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using NeoRadar.PluginSdk;
 using NeoRadar.PluginSdk.Airport;
 using NeoRadar.PluginSdk.Chat;
@@ -173,7 +175,7 @@ public sealed class ViffCdmPlugin : BasePlugin
 
         void Changed()
         {
-            publisher.Publish(store.Flights(), clock.GetUtcNow());
+            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
             _panel?.Refresh();
             RequestSync();
         }
@@ -197,7 +199,7 @@ public sealed class ViffCdmPlugin : BasePlugin
         sync.Synced += () =>
         {
             master.NoteConnected();
-            publisher.Publish(store.Flights(), clock.GetUtcNow());
+            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
             panel.Refresh();
         };
 
@@ -210,12 +212,15 @@ public sealed class ViffCdmPlugin : BasePlugin
         _syncJob = scheduler.Every("sync", TimeSpan.FromSeconds(refreshSeconds), sync.RunAsync);
         scheduler.Every("tags", TimeSpan.FromSeconds(1), _ =>
         {
-            publisher.Publish(store.Flights(), clock.GetUtcNow());
+            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
             return System.Threading.Tasks.Task.CompletedTask;
         });
 
         core.Logger.Info($"vIFF CDM {PluginVersion} reading {apiUrl} every {refreshSeconds} s");
     }
+
+    private static IReadOnlyList<FlightView> AllFlights(CdmStore store, CdmSync sync) =>
+        store.Flights().Concat(store.NetworkFlights(sync.LatestTraffic)).ToList();
 
     private void RequestSync()
     {

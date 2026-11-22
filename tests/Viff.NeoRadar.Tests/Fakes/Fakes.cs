@@ -40,10 +40,24 @@ internal sealed class FakeViffApi : IViffApi
 
     public List<MasterAirport> Masters { get; } = new();
 
+    public List<RestrictedFlight> Restricted { get; } = new();
+
+    public List<string> DepartureReads { get; } = new();
+
     public bool Accept { get; set; } = true;
 
-    public Task<IReadOnlyList<DepartureRecord>?> GetDeparturesAsync(string icao, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<DepartureRecord>?>(Departures.TryGetValue(icao, out List<DepartureRecord>? records) ? records.ToList() : new List<DepartureRecord>());
+    public Task<IReadOnlyList<DepartureRecord>?> GetDeparturesAsync(string icao, CancellationToken cancellationToken)
+    {
+        lock (_lock)
+        {
+            DepartureReads.Add(icao);
+        }
+
+        return Task.FromResult<IReadOnlyList<DepartureRecord>?>(Departures.TryGetValue(icao, out List<DepartureRecord>? records) ? records.ToList() : new List<DepartureRecord>());
+    }
+
+    public Task<IReadOnlyList<RestrictedFlight>?> GetRestrictedAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<RestrictedFlight>?>(Restricted.ToList());
 
     public Task<AirportCapacity?> GetCapacityAsync(string icao, CancellationToken cancellationToken) =>
         Task.FromResult(Capacities.GetValueOrDefault(icao));

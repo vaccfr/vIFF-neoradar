@@ -20,6 +20,8 @@ namespace Viff.NeoRadar.Cdm;
 internal sealed class CdmSync
 {
     private static readonly TimeSpan s_capacityRefresh = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan s_networkAirportRefresh = TimeSpan.FromMinutes(1);
+    private const int MaxNetworkAirportsPerCycle = 6;
     private const int MaxScratchpadWritesPerCycle = 4;
 
     private readonly IViffApi _api;
@@ -35,6 +37,7 @@ internal sealed class CdmSync
     // Airports named in a .cdm command that the airport configuration does not hold; read by the command thread too.
     private readonly object _lock = new();
     private readonly HashSet<string> _extraAirports = new(StringComparer.OrdinalIgnoreCase);
+    private volatile TrafficSnapshot _latestTraffic = TrafficSnapshot.Empty;
 
     public CdmSync(
         IViffApi api,
@@ -57,6 +60,11 @@ internal sealed class CdmSync
         _controllerData = controllerData;
         _clock = clock;
     }
+
+    /// <summary>
+    /// Gets the client's flights as read at the start of the last cycle.
+    /// </summary>
+    public TrafficSnapshot LatestTraffic => _latestTraffic;
 
     /// <summary>
     /// Raised on the sync job after each cycle.
@@ -106,11 +114,18 @@ internal sealed class CdmSync
     {
         DateTimeOffset now = _clock.GetUtcNow();
         TrafficSnapshot traffic = _gate.Callsign.Length > 0 ? TrafficSnapshot.Read(_flightplans, _controllerData) : TrafficSnapshot.Empty;
+        _latestTraffic = traffic;
 
         IReadOnlyList<MasterAirport>? masters = await _api.GetMastersAsync(cancellationToken).ConfigureAwait(false);
         if (masters is not null)
         {
             _store.SetMasters(masters);
+        }
+
+        IReadOnlyList<RestrictedFlight>? restricted = await _api.GetRestrictedAsync(cancellationToken).ConfigureAwait(false);
+        if (restricted is not null)
+        {
+            _store.SetNetworkCtots(restricted);
         }
 
         IReadOnlyList<string> watched = WatchedAirports();
@@ -129,7 +144,9 @@ internal sealed class CdmSync
             }
         }
 
-        _store.RetainAirports(new HashSet<string>(watched, StringComparer.OrdinalIgnoreCase));
+        HashSet<string> watchedSet = new(watched, StringComparer.OrdinalIgnoreCase);
+        _store.RetainAirports(watchedSet);
+        await ReadNetworkAirportsAsync(traffic, watchedSet, now, cancellationToken).ConfigureAwait(false);
         foreach (FlightView flight in _store.Flights())
         {
             if (traffic[flight.Record.Callsign].Started && flight.Asat is null)
@@ -149,6 +166,42 @@ internal sealed class CdmSync
         }
 
         Synced?.Invoke();
+    }
+
+    // Reads the departures of other airports with a master that the client has traffic from, so their TSATs show.
+    private async Task ReadNetworkAirportsAsync(
+        TrafficSnapshot traffic,
+        IReadOnlySet<string> watched,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        HashSet<string> origins = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string callsign in traffic.Callsigns)
+        {
+            string origin = traffic[callsign].Origin;
+            if (origin.Length == 4 && !watched.Contains(origin) && _store.Airport(origin).HasMaster)
+            {
+                origins.Add(origin);
+            }
+        }
+
+        IEnumerable<string> due = origins
+            .Select(icao => (Icao: icao, FetchedAt: _store.NetworkFetchedAt(icao)))
+            .Where(a => a.FetchedAt is null || a.FetchedAt.Value <= now - s_networkAirportRefresh)
+            .OrderBy(a => a.FetchedAt ?? DateTimeOffset.MinValue)
+            .Take(MaxNetworkAirportsPerCycle)
+            .Select(a => a.Icao)
+            .ToList();
+        foreach (string icao in due)
+        {
+            IReadOnlyList<DepartureRecord>? departures = await _api.GetDeparturesAsync(icao, cancellationToken).ConfigureAwait(false);
+            if (departures is not null)
+            {
+                _store.ReplaceNetworkDepartures(icao, departures, now);
+            }
+        }
+
+        _store.RetainNetworkAirports(origins);
     }
 
     // Mirrors the EuroScope plugin's .cdm remarks and .cdm rmkctot for controllers still reading the scratchpad.

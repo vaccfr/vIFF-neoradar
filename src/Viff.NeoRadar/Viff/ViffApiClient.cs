@@ -16,6 +16,11 @@ internal interface IViffApi
 
     Task<AirportCapacity?> GetCapacityAsync(string icao, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Gets every flight on the network that holds a CTOT.
+    /// </summary>
+    Task<IReadOnlyList<RestrictedFlight>?> GetRestrictedAsync(CancellationToken cancellationToken);
+
     Task<IReadOnlyList<MasterAirport>?> GetMastersAsync(CancellationToken cancellationToken);
 
     Task<bool> SetMasterAsync(string icao, string position, CancellationToken cancellationToken);
@@ -56,6 +61,12 @@ internal sealed class ViffApiClient : IViffApi, IDisposable
     {
         string? body = await SendAsync(HttpMethod.Get, $"etfms/getCadAirport?icao={Escape(icao)}", cancellationToken).ConfigureAwait(false);
         return body is null ? null : ViffJson.ParseCapacity(body);
+    }
+
+    public async Task<IReadOnlyList<RestrictedFlight>?> GetRestrictedAsync(CancellationToken cancellationToken)
+    {
+        string? body = await SendAsync(HttpMethod.Get, "etfms/restricted", cancellationToken).ConfigureAwait(false);
+        return body is null ? null : Parsed(ViffJson.ParseRestricted(body), "regulated flights");
     }
 
     public async Task<IReadOnlyList<MasterAirport>?> GetMastersAsync(CancellationToken cancellationToken)

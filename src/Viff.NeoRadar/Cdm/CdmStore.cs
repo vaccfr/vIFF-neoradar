@@ -7,14 +7,17 @@ using Viff.NeoRadar.Viff;
 namespace Viff.NeoRadar.Cdm;
 
 /// <summary>
-/// Represents what the plugin knows of one watched airport.
+/// Represents what the plugin knows of one airport.
 /// </summary>
 /// <param name="Icao">The airport's ICAO code.</param>
-/// <param name="Capacity">vIFF's capacity for the airport, or null before it is known.</param>
+/// <param name="Capacity">vIFF's capacity for the airport, or null when it has not been read.</param>
 /// <param name="MasterPosition">The position vIFF lists as master, or empty when there is none.</param>
 internal sealed record AirportView(string Icao, AirportCapacity? Capacity, string MasterPosition)
 {
-    public bool IsCdm => Capacity?.IsCdm == true;
+    /// <summary>
+    /// Gets a value indicating whether the airport runs CDM: as vIFF's CAD says, or, before it is read, because it has a master.
+    /// </summary>
+    public bool IsCdm => Capacity?.IsCdm ?? HasMaster;
 
     public bool HasMaster => MasterPosition.Length > 0;
 }
@@ -22,20 +25,24 @@ internal sealed record AirportView(string Icao, AirportCapacity? Capacity, strin
 /// <summary>
 /// Represents one departure with everything the tags need about it.
 /// </summary>
-/// <param name="Record">The flight as vIFF last reported it, with this client's own writes applied.</param>
+/// <param name="Record">The flight as vIFF last reported it, with this client's own writes and the network CTOT applied.</param>
 /// <param name="Airport">The departure airport.</param>
 /// <param name="Asat">When this client first saw start-up approved, or null.</param>
 /// <param name="TobtSetBy">"P" when the pilot set the TOBT, "A" when a controller did, or empty when unconfirmed.</param>
-internal sealed record FlightView(DepartureRecord Record, AirportView Airport, DateTimeOffset? Asat, string TobtSetBy);
+/// <param name="Watched">True for a departure from one of the client's own airports, false for one from elsewhere on the network.</param>
+internal sealed record FlightView(DepartureRecord Record, AirportView Airport, DateTimeOffset? Asat, string TobtSetBy, bool Watched = true);
 
 /// <summary>
-/// Holds the departures, capacities and masters of the watched airports, as last read from vIFF.
+/// Holds what vIFF last reported: the departures of the watched airports, the departures of other mastered airports the
+/// client has traffic from, every CTOT on the network, capacities and masters.
 /// </summary>
 internal sealed class CdmStore
 {
     // Guards every field; the sync job writes, the tag, command and window threads read.
     private readonly object _lock = new();
     private readonly Dictionary<string, List<DepartureRecord>> _departures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (List<DepartureRecord> Records, DateTimeOffset FetchedAt)> _networkDepartures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RestrictedFlight> _networkCtots = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (AirportCapacity? Capacity, DateTimeOffset FetchedAt)> _capacities = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _masters = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _asat = new(StringComparer.OrdinalIgnoreCase);
@@ -44,22 +51,72 @@ internal sealed class CdmStore
     /// <summary>
     /// Gets when the departures were last read, or null before the first read.
     /// </summary>
-    public DateTimeOffset? LastSync { get; private set; }
+    public DateTimeOffset? LastSync
+    {
+        get { lock (_lock) { return _lastSync; } }
+    }
+
+    private DateTimeOffset? _lastSync;
 
     public void ReplaceDepartures(string icao, IReadOnlyList<DepartureRecord> records, DateTimeOffset now)
     {
         lock (_lock)
         {
             _departures[icao] = records.ToList();
-            foreach (DepartureRecord record in records)
-            {
-                if (record.Cdm.ReqTobt.Length > 0 && record.Cdm.ReqTobtType.Length > 0)
-                {
-                    _tobtSources[record.Callsign] = (record.Cdm.ReqTobtType[..1].ToUpperInvariant(), CdmTime.Display(record.Cdm.ReqTobt));
-                }
-            }
+            NoteRequestsUnderLock(records);
+            _lastSync = now;
+        }
+    }
 
-            LastSync = now;
+    /// <summary>
+    /// Stores the departures of an airport the client does not watch but has traffic from.
+    /// </summary>
+    public void ReplaceNetworkDepartures(string icao, IReadOnlyList<DepartureRecord> records, DateTimeOffset now)
+    {
+        lock (_lock)
+        {
+            _networkDepartures[icao] = (records.ToList(), now);
+            NoteRequestsUnderLock(records);
+        }
+    }
+
+    /// <summary>
+    /// Gets when an unwatched airport's departures were last read, or null when never.
+    /// </summary>
+    public DateTimeOffset? NetworkFetchedAt(string icao)
+    {
+        lock (_lock)
+        {
+            return _networkDepartures.TryGetValue(icao, out (List<DepartureRecord> Records, DateTimeOffset FetchedAt) entry) ? entry.FetchedAt : null;
+        }
+    }
+
+    /// <summary>
+    /// Drops the departures of unwatched airports the client no longer has traffic from.
+    /// </summary>
+    public void RetainNetworkAirports(IReadOnlySet<string> airports)
+    {
+        lock (_lock)
+        {
+            foreach (string icao in _networkDepartures.Keys.Where(k => !airports.Contains(k)).ToList())
+            {
+                _networkDepartures.Remove(icao);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Replaces the network-wide list of CTOTs.
+    /// </summary>
+    public void SetNetworkCtots(IReadOnlyList<RestrictedFlight> flights)
+    {
+        lock (_lock)
+        {
+            _networkCtots.Clear();
+            foreach (RestrictedFlight flight in flights)
+            {
+                _networkCtots[flight.Callsign] = flight;
+            }
         }
     }
 
@@ -153,24 +210,41 @@ internal sealed class CdmStore
         }
     }
 
+    /// <summary>
+    /// Gets a watched airport's departures, each with its network CTOT.
+    /// </summary>
     public IReadOnlyList<DepartureRecord> Departures(string icao)
     {
         lock (_lock)
         {
-            return _departures.TryGetValue(icao, out List<DepartureRecord>? records) ? records.ToList() : Array.Empty<DepartureRecord>();
-        }
-    }
-
-    public DepartureRecord? Find(string callsign)
-    {
-        lock (_lock)
-        {
-            return FindUnderLock(callsign);
+            return _departures.TryGetValue(icao, out List<DepartureRecord>? records)
+                ? records.Select(WithNetworkCtotUnderLock).ToList()
+                : Array.Empty<DepartureRecord>();
         }
     }
 
     /// <summary>
-    /// Replaces one flight's record, as a write this client made will read back.
+    /// Finds a departure of a watched airport, with its network CTOT, or null.
+    /// </summary>
+    public DepartureRecord? Find(string callsign)
+    {
+        lock (_lock)
+        {
+            foreach (List<DepartureRecord> records in _departures.Values)
+            {
+                DepartureRecord? record = records.Find(r => string.Equals(r.Callsign, callsign, StringComparison.OrdinalIgnoreCase));
+                if (record is not null)
+                {
+                    return WithNetworkCtotUnderLock(record);
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Replaces one watched flight's record, as a write this client made will read back.
     /// </summary>
     public void Update(string callsign, Func<DepartureRecord, DepartureRecord> change)
     {
@@ -215,7 +289,7 @@ internal sealed class CdmStore
     }
 
     /// <summary>
-    /// Gets every watched departure not yet airborne, with its airport.
+    /// Gets every departure of the watched airports not yet airborne.
     /// </summary>
     public IReadOnlyList<FlightView> Flights()
     {
@@ -225,20 +299,99 @@ internal sealed class CdmStore
             foreach (KeyValuePair<string, List<DepartureRecord>> airport in _departures)
             {
                 AirportView airportView = AirportUnderLock(airport.Key);
-                foreach (DepartureRecord record in airport.Value)
+                foreach (DepartureRecord record in airport.Value.Where(r => !r.IsAirborne))
                 {
-                    if (record.IsAirborne)
-                    {
-                        continue;
-                    }
-
-                    DateTimeOffset? asat = _asat.TryGetValue(record.Callsign, out DateTimeOffset seen) ? seen : null;
-                    views.Add(new FlightView(record, airportView, asat, TobtSetByUnderLock(record)));
+                    views.Add(ViewUnderLock(WithNetworkCtotUnderLock(record), airportView, watched: true));
                 }
             }
 
             return views;
         }
+    }
+
+    /// <summary>
+    /// Gets the flights the client holds that depart from elsewhere and are not yet airborne: those of other mastered
+    /// airports with their CDM times, and every other flight with a CTOT.
+    /// </summary>
+    public IReadOnlyList<FlightView> NetworkFlights(TrafficSnapshot traffic)
+    {
+        lock (_lock)
+        {
+            HashSet<string> taken = new(StringComparer.OrdinalIgnoreCase);
+            foreach (List<DepartureRecord> records in _departures.Values)
+            {
+                taken.UnionWith(records.Select(r => r.Callsign));
+            }
+
+            List<FlightView> views = new();
+            foreach (KeyValuePair<string, (List<DepartureRecord> Records, DateTimeOffset FetchedAt)> airport in _networkDepartures)
+            {
+                AirportView airportView = AirportUnderLock(airport.Key);
+                foreach (DepartureRecord record in airport.Value.Records)
+                {
+                    if (!record.IsAirborne && traffic.Contains(record.Callsign) && taken.Add(record.Callsign))
+                    {
+                        views.Add(ViewUnderLock(WithNetworkCtotUnderLock(record), airportView, watched: false));
+                    }
+                }
+            }
+
+            foreach (RestrictedFlight flight in _networkCtots.Values)
+            {
+                if (flight.Atot.Length > 0 || !traffic.Contains(flight.Callsign) || !taken.Add(flight.Callsign))
+                {
+                    continue;
+                }
+
+                TrafficEntry entry = traffic[flight.Callsign];
+                DepartureRecord record = new()
+                {
+                    Callsign = flight.Callsign,
+                    Departure = entry.Origin,
+                    Eobt = entry.Eobt,
+                    Ctot = flight.Ctot,
+                    Regulation = flight.Regulation,
+                    CdmStatus = flight.CdmStatus,
+                };
+                views.Add(ViewUnderLock(record, AirportUnderLock(entry.Origin), watched: false));
+            }
+
+            return views;
+        }
+    }
+
+    // An ATFCM CTOT always applies, so one the network list holds fills a record that the airport feed left without one.
+    private DepartureRecord WithNetworkCtotUnderLock(DepartureRecord record)
+    {
+        if (record.Ctot.Length > 0 ||
+            !_networkCtots.TryGetValue(record.Callsign, out RestrictedFlight? flight) ||
+            flight.Atot.Length > 0)
+        {
+            return record;
+        }
+
+        return record with
+        {
+            Ctot = flight.Ctot,
+            Regulation = record.Regulation.Length > 0 ? record.Regulation : flight.Regulation,
+        };
+    }
+
+    private void NoteRequestsUnderLock(IReadOnlyList<DepartureRecord> records)
+    {
+        foreach (DepartureRecord record in records)
+        {
+            if (record.Cdm.ReqTobt.Length > 0 && record.Cdm.ReqTobtType.Length > 0)
+            {
+                _tobtSources[record.Callsign] = (record.Cdm.ReqTobtType[..1].ToUpperInvariant(), CdmTime.Display(record.Cdm.ReqTobt));
+            }
+        }
+    }
+
+    private FlightView ViewUnderLock(DepartureRecord record, AirportView airport, bool watched)
+    {
+        DateTimeOffset? asat = _asat.TryGetValue(record.Callsign, out DateTimeOffset seen) ? seen : null;
+        return new FlightView(record, airport, asat, TobtSetByUnderLock(record), watched);
     }
 
     private string TobtSetByUnderLock(DepartureRecord record)
@@ -257,19 +410,5 @@ internal sealed class CdmStore
         AirportCapacity? capacity = _capacities.TryGetValue(icao, out (AirportCapacity? Capacity, DateTimeOffset FetchedAt) entry) ? entry.Capacity : null;
         string master = _masters.TryGetValue(icao, out string? position) ? position : string.Empty;
         return new AirportView(icao.ToUpperInvariant(), capacity, master);
-    }
-
-    private DepartureRecord? FindUnderLock(string callsign)
-    {
-        foreach (List<DepartureRecord> records in _departures.Values)
-        {
-            DepartureRecord? record = records.Find(r => string.Equals(r.Callsign, callsign, StringComparison.OrdinalIgnoreCase));
-            if (record is not null)
-            {
-                return record;
-            }
-        }
-
-        return null;
     }
 }

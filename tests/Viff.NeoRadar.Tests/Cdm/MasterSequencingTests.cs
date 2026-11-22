@@ -120,7 +120,7 @@ public sealed class MasterSequencingTests
         Load(TestData.Departure("PUSHED", "1150").WithCdm(c => c with { Tobt = "115000", Tsat = "115500", Ttot = "120500" }));
         TrafficSnapshot traffic = new(new Dictionary<string, TrafficEntry>
         {
-            ["PUSHED"] = new(GroundStatus.Push, "27L", "OPALE2A", "M", "1150", string.Empty),
+            ["PUSHED"] = new(GroundStatus.Push, "LFPG", "27L", "OPALE2A", "M", "1150", string.Empty),
         });
 
         await _master.RunAsync("LFPG", traffic, TestData.Noon, CancellationToken.None);
@@ -136,7 +136,7 @@ public sealed class MasterSequencingTests
         Load(TestData.Departure("ICED", "1210").WithCdm(c => c with { Tobt = "121000", Deice = "REMOTE/REM1" }));
         TrafficSnapshot traffic = new(new Dictionary<string, TrafficEntry>
         {
-            ["ICED"] = new(GroundStatus.None, "27L", string.Empty, "H", "1210", string.Empty),
+            ["ICED"] = new(GroundStatus.None, "LFPG", "27L", string.Empty, "H", "1210", string.Empty),
         });
 
         await _master.RunAsync("LFPG", traffic, TestData.Noon, CancellationToken.None);
@@ -166,6 +166,20 @@ public sealed class MasterSequencingTests
 
         Assert.Empty(_api.Writes);
         Assert.Single(_notices);
+    }
+
+    [Fact]
+    public async Task RunAsync_HoldsTheTakeOffToACtotFromTheNetworkList()
+    {
+        Load(TestData.Departure("AFR1", "1210"), TestData.Departure("AFR2", "1210"));
+        _store.SetNetworkCtots(new[] { new RestrictedFlight("AFR1", "1240", "LSGG", string.Empty, string.Empty) });
+
+        await RunAsync(TestData.Noon);
+
+        Dictionary<string, CdmDataUpdate> writes = _api.Writes.ToDictionary(w => w.Callsign);
+        Assert.Equal(("123000", "124000", "1240"), (writes["AFR1"].Tsat, writes["AFR1"].Ttot, writes["AFR1"].Ctot));
+        Assert.Equal("122000", writes["AFR2"].Ttot);
+        Assert.DoesNotContain(_api.Dpis, d => d.Callsign == "AFR1" && d.Value.StartsWith("OBT/", StringComparison.Ordinal));
     }
 
     private void Load(params DepartureRecord[] records) => _store.ReplaceDepartures("LFPG", records, TestData.Noon);

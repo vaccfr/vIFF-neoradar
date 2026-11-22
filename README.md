@@ -20,6 +20,15 @@ When a controller who is not master changes a flight, the change goes to the mas
 (`REQTOBT`, `REQASRT`), exactly as the EuroScope plugin does, so it works whichever client the master uses.
 At an airport with no master, changes are written directly.
 
+### Flights from other airports
+
+Every CTOT on the network is read each cycle from vIFF's `/etfms/restricted` list, so any flight the client holds
+shows its CTOT and regulation, wherever it departs from. The same list fills in a CTOT the departure airport's feed
+lacks, and the master's sequencer always holds the take-off to it. For departures from other airports that have a
+vIFF master, such as an inbound from Geneva or Frankfurt, the plugin also reads that airport once a minute and shows
+its TOBT, TSAT and TTOT. These flights get tags but no menus, as their data belongs to another airport's master, and
+`EXP_Listed` stays false for them so they stay out of the start-up list.
+
 No local configuration files are needed: rates, taxi times and the list of CDM airports come from vIFF;
 runways, SIDs, ground status and wake categories come from NeoRadar.
 
@@ -90,9 +99,15 @@ session never changes live CDM data.
 
 ## Settings
 
-Optional plugin settings: `apiUrl` (default `https://viff-system.network/`), `apiKey` (default the key the
-EuroScope plugin uses) and `refreshSeconds` (default 15, at least 5). Rates and de-icing pads set by command
-are stored there too.
+Optional plugin settings: `apiUrl` (default `https://viff-system.network/`), `apiKey` and `refreshSeconds`
+(default 15, at least 5). Rates and de-icing pads set by command are stored there too.
+
+### The API key
+
+vIFF does not issue keys per user today. The EuroScope plugin sends the fixed key `TEST` from its public source,
+and the plugin does the same by default. Reads do not check the key at all: no key, `TEST` and an invented key all
+return the same data. vIFF's API description declares the `x-api-key` header for every endpoint, so writes may check
+it; this has not been tested, to avoid writing to live data. Ask the vIFF team before relying on another key.
 
 ## Known gaps
 

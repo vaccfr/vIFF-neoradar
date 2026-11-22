@@ -76,6 +76,39 @@ internal static class ViffJson
     }
 
     /// <summary>
+    /// Parses an <c>/etfms/restricted</c> response, keeping flights with a valid CTOT, or returns null when it is not a JSON array.
+    /// </summary>
+    public static IReadOnlyList<RestrictedFlight>? ParseRestricted(string json)
+    {
+        using JsonDocument? document = TryParse(json);
+        if (document is null || document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        List<RestrictedFlight> flights = new();
+        foreach (JsonElement item in document.RootElement.EnumerateArray())
+        {
+            string callsign = Text(item, "callsign");
+            string ctot = Text(item, "ctot");
+            if (callsign.Length == 0 || ctot.Length != 4)
+            {
+                continue;
+            }
+
+            string regulation = Text(item, "mostPenalisingRegulation");
+            flights.Add(new RestrictedFlight(
+                callsign,
+                ctot,
+                regulation.Length > 0 ? regulation : Text(item, "mostPenalizingAirspace"),
+                Text(item, "atot"),
+                Text(item, "cdmSts")));
+        }
+
+        return flights;
+    }
+
+    /// <summary>
     /// Parses a <c>/etfms/getCadAirport</c> response, or returns null when it holds no airport.
     /// </summary>
     public static AirportCapacity? ParseCapacity(string json)

@@ -10,6 +10,7 @@ namespace Viff.NeoRadar.Cdm;
 /// </summary>
 internal sealed record TrafficEntry(
     GroundStatus GroundStatus,
+    string Origin,
     string Runway,
     string Sid,
     string WakeCategory,
@@ -28,7 +29,7 @@ internal sealed record TrafficEntry(
 /// </summary>
 internal sealed class TrafficSnapshot
 {
-    private static readonly TrafficEntry s_unknown = new(GroundStatus.None, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+    private static readonly TrafficEntry s_unknown = new(GroundStatus.None, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 
     private readonly IReadOnlyDictionary<string, TrafficEntry> _entries;
 
@@ -62,6 +63,7 @@ internal sealed class TrafficSnapshot
             string sid = plan.Route.Sid.Length > 0 ? plan.Route.Sid : plan.Route.SuggestedSid;
             entries[plan.Callsign] = new TrafficEntry(
                 statuses.GetValueOrDefault(plan.Callsign),
+                plan.Origin.ToUpperInvariant(),
                 runway,
                 sid,
                 plan.WakeCategory,
@@ -76,6 +78,16 @@ internal sealed class TrafficSnapshot
 
         return new TrafficSnapshot(entries);
     }
+
+    /// <summary>
+    /// Gets the callsigns the client holds a flight plan or controller data for.
+    /// </summary>
+    public IEnumerable<string> Callsigns => _entries.Keys;
+
+    /// <summary>
+    /// Returns whether the client holds the flight.
+    /// </summary>
+    public bool Contains(string callsign) => _entries.ContainsKey(callsign);
 
     public TrafficEntry this[string callsign] => _entries.TryGetValue(callsign, out TrafficEntry? entry) ? entry : s_unknown;
 }

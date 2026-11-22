@@ -105,11 +105,11 @@ internal static class CdmTagFormatter
             [CdmItem.Ttot] = new TagText(ttot is null ? string.Empty : CdmTime.ToHhmm(ttot.Value)),
             [CdmItem.Ctot] = Ctot(record, ctot, ttot, now),
             [CdmItem.Etfms] = new TagText(etfms, EtfmsColour(etfms)),
-            [CdmItem.Ready] = new TagText("RDY", record.Cdm.Asrt.Length > 0 ? DarkGreen : Red),
+            [CdmItem.Ready] = new TagText(flight.Watched ? "RDY" : string.Empty, record.Cdm.Asrt.Length > 0 ? DarkGreen : Red),
             [CdmItem.Asrt] = new TagText(CdmTime.Display(record.Cdm.Asrt)),
             [CdmItem.Asat] = new TagText(flight.Asat is { } asat && asat != DateTimeOffset.MinValue ? CdmTime.ToHhmm(asat) : string.Empty),
             [CdmItem.DeIce] = new TagText(DeIce.Label(record.Cdm.Deice), Yellow),
-            [CdmItem.Message] = new TagText(isCdm ? "MSG" : string.Empty, record.Informed ? DarkGreen : Red),
+            [CdmItem.Message] = new TagText(isCdm && flight.Watched ? "MSG" : string.Empty, record.Informed ? DarkGreen : Red),
             [CdmItem.Regulation] = new TagText(ctot.Length > 0 ? (record.HasManualCtot ? CdmDataUpdate.ManualReason : record.Regulation) : string.Empty),
             [CdmItem.Eobt] = new TagText(CdmTime.Display(record.Eobt)),
         };
