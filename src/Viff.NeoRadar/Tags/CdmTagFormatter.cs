@@ -49,6 +49,9 @@ internal enum TsatState
 
     /// <summary>Past TSAT +6 without start-up; the flight has lost its place.</summary>
     Expired,
+
+    /// <summary>vIFF holds the flight plan suspended (FLS); it is out of the sequence.</summary>
+    Suspended,
 }
 
 /// <summary>
@@ -65,6 +68,7 @@ internal sealed record FlightTags(
     bool Ready,
     bool HasCtot,
     bool Informed,
+    bool Suspended,
     TsatState Tsat,
     string Etfms);
 
@@ -92,13 +96,14 @@ internal static class CdmTagFormatter
         bool started = flight.Asat is not null || record.Aobt.Length > 0;
         DateTimeOffset? tsat = isCdm ? CdmTime.ParseNear(record.Cdm.Tsat, now) : null;
         DateTimeOffset? ttot = isCdm ? CdmTime.ParseNear(record.Cdm.Ttot, now) : null;
-        TsatState state = StateOf(isCdm, started, tsat, now);
+        bool suspended = record.Suspension.Length > 0;
+        TsatState state = suspended && isCdm && !started ? TsatState.Suspended : StateOf(isCdm, started, tsat, now);
         string ctot = CdmTime.Display(record.EffectiveCtot);
         string etfms = Etfms(record);
 
         Dictionary<CdmItem, TagText> items = new()
         {
-            [CdmItem.Tobt] = Tobt(record, isCdm, now),
+            [CdmItem.Tobt] = suspended ? Tobt(record, isCdm, now) with { Colour = Red } : Tobt(record, isCdm, now),
             [CdmItem.SetBy] = new TagText(isCdm ? flight.TobtSetBy : string.Empty, CdmTagFormatter.DarkGreen),
             [CdmItem.Tsat] = Tsat(state, tsat, flashOn),
             [CdmItem.Ttg] = Ttg(state, tsat, now),
@@ -114,7 +119,7 @@ internal static class CdmTagFormatter
             [CdmItem.Eobt] = new TagText(CdmTime.Display(record.Eobt)),
         };
 
-        return new FlightTags(items, isCdm, record.Cdm.Asrt.Length > 0, ctot.Length > 0, record.Informed, state, etfms);
+        return new FlightTags(items, isCdm, record.Cdm.Asrt.Length > 0, ctot.Length > 0, record.Informed, suspended, state, etfms);
     }
 
     public static TsatState StateOf(bool isCdm, bool started, DateTimeOffset? tsat, DateTimeOffset now)
@@ -148,12 +153,12 @@ internal static class CdmTagFormatter
     /// </summary>
     public static string Etfms(DepartureRecord record)
     {
-        string status = record.AtfcmStatus.ToUpperInvariant();
-        if (status.StartsWith("FLS", StringComparison.Ordinal))
+        if (record.Suspension.Length > 0)
         {
-            return status;
+            return record.Suspension;
         }
 
+        string status = record.AtfcmStatus.ToUpperInvariant();
         if (record.IsRea || string.Equals(record.CdmStatus, "REA", StringComparison.OrdinalIgnoreCase))
         {
             return "REA";
@@ -180,12 +185,13 @@ internal static class CdmTagFormatter
         TsatState.Future => new TagText(CdmTime.ToHhmm(tsat!.Value), LightGreen),
         TsatState.Window => new TagText(CdmTime.ToHhmm(tsat!.Value), DarkGreen),
         TsatState.Closing => new TagText(CdmTime.ToHhmm(tsat!.Value), flashOn ? Yellow : Grey),
+        TsatState.Suspended => new TagText(tsat is null ? "~" : CdmTime.ToHhmm(tsat.Value), Red),
         _ => new TagText(CdmTime.ToHhmm(tsat!.Value), Red),
     };
 
     private static TagText Ttg(TsatState state, DateTimeOffset? tsat, DateTimeOffset now)
     {
-        if (tsat is null || state is TsatState.None or TsatState.Pending)
+        if (tsat is null || state is TsatState.None or TsatState.Pending or TsatState.Suspended)
         {
             return new TagText(string.Empty);
         }

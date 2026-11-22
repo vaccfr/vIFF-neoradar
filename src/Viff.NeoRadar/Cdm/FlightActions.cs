@@ -13,7 +13,8 @@ namespace Viff.NeoRadar.Cdm;
 /// <remarks>
 /// When this client is master of the departure airport, or the airport has none, the change is written to vIFF at once.
 /// When another controller is master, it is sent as a request (REQTOBT, REQASRT) that their plugin applies, so an
-/// EuroScope master hears it too. Each method returns at once; the network work runs on the scheduler.
+/// EuroScope master hears it too. Each method returns at once; the network work runs on the scheduler. Nothing is shown
+/// before vIFF has it: a successful write asks for an immediate read, and the tags follow what vIFF returns.
 /// </remarks>
 internal sealed class FlightActions
 {
@@ -68,11 +69,7 @@ internal sealed class FlightActions
                 Ttot = string.Empty,
                 Asrt = record.Cdm.Asrt.Length > 0 ? record.Cdm.Asrt : now,
             };
-            Run($"Ready TOBT {callsign}", ct => WriteAsync(update, ct, rea ? "REA/1" : null), () =>
-            {
-                _store.Update(callsign, update.ApplyTo);
-                _store.NoteTobtSource(callsign, "A", update.Tobt);
-            });
+            Run($"Ready TOBT {callsign}", ct => WriteAsync(update, ct, rea ? "REA/1" : null), () => _store.NoteTobtSource(callsign, "A", update.Tobt));
         }
         else
         {
@@ -117,7 +114,6 @@ internal sealed class FlightActions
             };
             Run($"TOBT {(text.Length == 0 ? "cleared" : text)} {callsign}", ct => WriteAsync(update, ct), () =>
             {
-                _store.Update(callsign, update.ApplyTo);
                 if (text.Length > 0)
                 {
                     _store.NoteTobtSource(callsign, "A", update.Tobt);
@@ -150,7 +146,7 @@ internal sealed class FlightActions
         if (direct)
         {
             CdmDataUpdate update = CdmDataUpdate.From(record) with { Asrt = setting ? now : string.Empty };
-            Run($"RDY {(setting ? "set" : "cleared")} {callsign}", ct => WriteAsync(update, ct, rea), () => _store.Update(callsign, update.ApplyTo));
+            Run($"RDY {(setting ? "set" : "cleared")} {callsign}", ct => WriteAsync(update, ct, rea), null);
         }
         else if (!setting)
         {
@@ -184,7 +180,7 @@ internal sealed class FlightActions
         }
 
         CdmDataUpdate update = CdmDataUpdate.From(record) with { Deice = DeIce.Stored(label) };
-        Run($"DEICE {(label.Length == 0 ? "none" : label)} {callsign}", ct => WriteAsync(update, ct), () => _store.Update(callsign, update.ApplyTo));
+        Run($"DEICE {(label.Length == 0 ? "none" : label)} {callsign}", ct => WriteAsync(update, ct), null);
     }
 
     /// <summary>
@@ -217,7 +213,7 @@ internal sealed class FlightActions
             Tsat = string.Empty,
             Ttot = string.Empty,
         };
-        Run($"Manual CTOT {(text.Length == 0 ? "removed" : text)} {callsign}", ct => WriteAsync(update, ct), () => _store.Update(callsign, update.ApplyTo));
+        Run($"Manual CTOT {(text.Length == 0 ? "removed" : text)} {callsign}", ct => WriteAsync(update, ct), null);
     }
 
     private bool TryBegin(string callsign, out DepartureRecord record, out AirportView airport, out bool direct)

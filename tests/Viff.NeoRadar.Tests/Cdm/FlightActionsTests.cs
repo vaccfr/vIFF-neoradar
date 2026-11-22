@@ -27,7 +27,8 @@ public sealed class FlightActionsTests
         _scheduler = new JobScheduler(_clock, new FakeLogger());
         _actions = new FlightActions(_api, _store, new ConnectionGate(_fsd), _scheduler, new Notifier(new FakeChat(), _feedback), _clock, () => { });
         _store.SetCapacity("LFPG", new AirportCapacity("LFPG", 30, 12, true), TestData.Noon);
-        _store.ReplaceDepartures("LFPG", new[] { TestData.Departure("AFR1", "1210").WithCdm(c => c with { Tobt = "121000", Tsat = "121500", Ttot = "122500" }) }, TestData.Noon);
+        _api.Departures["LFPG"] = new() { TestData.Departure("AFR1", "1210").WithCdm(c => c with { Tobt = "121000", Tsat = "121500", Ttot = "122500" }) };
+        Poll();
     }
 
     [Fact]
@@ -41,7 +42,10 @@ public sealed class FlightActionsTests
         CdmDataUpdate write = Assert.Single(_api.Writes);
         Assert.Equal(("120000", string.Empty, "1200"), (write.Tobt, write.Tsat, write.Asrt));
         Assert.Empty(_api.Dpis);
-        Assert.Equal("A", Assert.Single(_store.Flights()).TobtSetBy);
+        Assert.Equal("121000", _store.Find("AFR1")!.Cdm.Tobt);
+
+        Poll();
+        Assert.Equal(("120000", "A"), (_store.Find("AFR1")!.Cdm.Tobt, Assert.Single(_store.Flights()).TobtSetBy));
     }
 
     [Fact]
@@ -101,6 +105,7 @@ public sealed class FlightActionsTests
         Drain();
         Assert.Equal("1200", Assert.Single(_api.Writes).Asrt);
 
+        Poll();
         _actions.ToggleReady("AFR1", withRea: false);
         Drain();
         Assert.Equal(string.Empty, _api.Writes.Last().Asrt);
@@ -114,6 +119,7 @@ public sealed class FlightActionsTests
 
         CdmDataUpdate write = Assert.Single(_api.Writes);
         Assert.Equal(("1245", CdmDataUpdate.ManualReason), (write.Ctot, write.Reason));
+        Poll();
         Assert.True(_store.Find("AFR1")!.HasManualCtot);
     }
 
@@ -128,6 +134,9 @@ public sealed class FlightActionsTests
         Assert.Empty(_api.Writes);
         Assert.Empty(_api.Dpis);
     }
+
+    // Reads vIFF again, as the next sync cycle does.
+    private void Poll() => _store.ReplaceDepartures("LFPG", _api.Departures["LFPG"], TestData.Noon);
 
     private void Drain() => Assert.True(_scheduler.WaitForIdle(TimeSpan.FromSeconds(5)));
 }

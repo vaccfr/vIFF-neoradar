@@ -16,6 +16,9 @@ One controller per airport, normally the one issuing IFR clearances, connects as
 calculates the sequence and writes it to vIFF. The master role is held on the vIFF server, so a reconnecting
 master gets it back and it is released on `.cdm slave`, on disconnect and when the plugin unloads.
 
+The display always follows vIFF: nothing a controller does is shown until vIFF has stored it. A successful change
+asks for an immediate read, so it appears within a second or two.
+
 When a controller who is not master changes a flight, the change goes to the master as a request
 (`REQTOBT`, `REQASRT`), exactly as the EuroScope plugin does, so it works whichever client the master uses.
 At an airport with no master, changes are written directly.
@@ -40,7 +43,10 @@ runways, SIDs, ground status and wake categories come from NeoRadar.
 - Flights with a CTOT, ATFCM or manual, are held to it; a flight that can no longer make CTOT +10 is flagged in the vIFF chat channel.
 - Confirmed TOBTs (pilot via VDGS, or set by ATC) and flights that reported ready are placed before unconfirmed ones.
 - Flights whose start-up was approved keep their times.
-- A flight that is not started and not ready by TSAT +6 loses its place until its TOBT changes.
+- A flight that is not started and not ready by TSAT +6 is suspended on vIFF (`SUSP`, shown as `FLS-CDM`) and
+  loses its place until its TOBT changes; the new TOBT is resequenced and its OBT sent so vIFF lifts the suspension.
+  The suspension is read back from vIFF, so it survives a master restart or handover.
+- A flight plan suspended by the network (`FLS-NRA`, `FLS-MR`, `FLS-GS`) is left out of the sequence and untouched.
 - `.cdm startupdelay` and `.cdm departuredelay` hold back TSATs and TTOTs per runway.
 - Pilot TOBT and start-up requests from the VDGS are applied by the master and acknowledged to vIFF.
 
@@ -51,12 +57,12 @@ runways, SIDs, ground status and wake categories come from NeoRadar.
 | BY | `TAG_BY`: P pilot, A ATC, blank unconfirmed | |
 | DEICE | `TAG_DEICE` | `ACTION_DEICE Menu`: none, STND, remote pads |
 | TTG | `TAG_TTG`: minutes to TSAT | |
-| E/TOBT | `TAG_TOBT`: TOBT at CDM airports, EOBT elsewhere | `ACTION_TOBT Menu`: Ready TOBT (+ REA with a CTOT), Edit TOBT. Also `ACTION_TOBT Ready`, `ACTION_TOBT Edit` |
-| TSAT | `TAG_TSAT`: `~`, light green before TSAT −5, green in the window, flashing at TSAT +5, red once expired | |
+| E/TOBT | `TAG_TOBT`: TOBT at CDM airports, EOBT elsewhere, red while the flight plan is suspended | `ACTION_TOBT Menu`: Ready TOBT (+ REA with a CTOT), Edit TOBT. Also `ACTION_TOBT Ready`, `ACTION_TOBT Edit` |
+| TSAT | `TAG_TSAT`: `~`, light green before TSAT −5, green in the window, flashing at TSAT +5, red once expired or suspended | |
 | ASAT | `TAG_ASAT` | |
 | TTOT | `TAG_TTOT` | `ACTION_TTOT Menu`: hold the take-off to a time |
 | CTOT | `TAG_CTOT`: green ATFCM, orange manual, red when it can no longer be met | `ACTION_CTOT Menu`: new TOBT for a revised CTOT, REA, manual CTOT |
-| ETFMS | `TAG_ETFMS`: FLS-*, REA, SAM, SRM, SLC, DES, ACT | `ACTION_ETFMS Menu`: send or cancel REA |
+| ETFMS | `TAG_ETFMS`: a suspension first (FLS-CDM, FLS-NRA, FLS-MR, FLS-GS) in red, then REA, SAM, SRM, SLC, DES, ACT | `ACTION_ETFMS Menu`: send or cancel REA |
 | MSG | `TAG_MSG`: green once the pilot was informed | |
 | RDY | `TAG_RDY`: red, green once set | `ACTION_RDY` sets or clears it, `ACTION_RDY REA` sets it and sends REA |
 | ASRT | `TAG_ASRT` | |
@@ -65,8 +71,8 @@ Ids are prefixed `plugin:vIFF CDM:`, for example `plugin:vIFF CDM:TAG_TSAT`. `TA
 `TAG_EOBT` are also available.
 
 Expressions for package conditions: `EXP_Listed` (a watched departure, not airborne, for list filters),
-`EXP_Is CDM`, `EXP_Ready`, `EXP_Has CTOT`, `EXP_Informed`, `EXP_TSAT Window`
-(`pending`, `future`, `window`, `closing`, `expired`) and `EXP_ETFMS`.
+`EXP_Is CDM`, `EXP_Ready`, `EXP_Has CTOT`, `EXP_Informed`, `EXP_Suspended`, `EXP_TSAT Window`
+(`pending`, `future`, `window`, `closing`, `expired`, `suspended`) and `EXP_ETFMS`.
 
 `Package/` beside the built plugin holds an example start-up list and label items to copy into a package.
 

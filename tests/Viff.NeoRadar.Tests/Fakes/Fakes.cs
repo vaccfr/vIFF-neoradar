@@ -85,24 +85,46 @@ internal sealed class FakeViffApi : IViffApi
         return Task.FromResult(Accept);
     }
 
+    /// <summary>Stores the write as vIFF would, so the next read returns it.</summary>
     public Task<bool> SetCdmDataAsync(CdmDataUpdate update, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
             Writes.Add(update);
+            if (Accept)
+            {
+                Change(update.Callsign, update.ApplyTo);
+            }
         }
 
         return Task.FromResult(Accept);
     }
 
+    /// <summary>Records the message; SUSP suspends the flight as vIFF does (FLS-CDM).</summary>
     public Task<bool> SendDpiAsync(string callsign, string value, CancellationToken cancellationToken)
     {
         lock (_lock)
         {
             Dpis.Add((callsign, value));
+            if (Accept && value == "SUSP")
+            {
+                Change(callsign, r => r with { CdmStatus = "FLS-CDM" });
+            }
         }
 
         return Task.FromResult(Accept);
+    }
+
+    private void Change(string callsign, Func<DepartureRecord, DepartureRecord> change)
+    {
+        foreach (List<DepartureRecord> records in Departures.Values)
+        {
+            int index = records.FindIndex(r => r.Callsign == callsign);
+            if (index >= 0)
+            {
+                records[index] = change(records[index]);
+            }
+        }
     }
 }
 

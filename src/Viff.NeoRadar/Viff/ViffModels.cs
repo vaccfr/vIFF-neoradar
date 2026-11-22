@@ -81,6 +81,18 @@ internal sealed record DepartureRecord
     /// <summary>Gets a value indicating whether the flight is airborne.</summary>
     public bool IsAirborne => Atot.Length > 0;
 
+    /// <summary>
+    /// Gets the suspension vIFF holds the flight plan under, such as FLS-CDM or FLS-NRA, or empty when it is not suspended.
+    /// </summary>
+    /// <remarks>vIFF reports a suspension in the network status, and some in the ATFCM status, so both are read.</remarks>
+    public string Suspension =>
+        CdmStatus.StartsWith("FLS", System.StringComparison.OrdinalIgnoreCase) ? CdmStatus.ToUpperInvariant()
+        : AtfcmStatus.StartsWith("FLS", System.StringComparison.OrdinalIgnoreCase) ? AtfcmStatus.ToUpperInvariant()
+        : string.Empty;
+
+    /// <summary>Gets a value indicating whether the CDM master suspended the flight after its TSAT expired.</summary>
+    public bool IsCdmSuspended => Suspension == "FLS-CDM";
+
     /// <summary>Gets a value indicating whether the master holds a manual CTOT and ATFCM none.</summary>
     public bool HasManualCtot =>
         Ctot.Length == 0 && Cdm.Ctot.Length > 0 && string.Equals(Cdm.Reason, CdmDataUpdate.ManualReason, System.StringComparison.OrdinalIgnoreCase);

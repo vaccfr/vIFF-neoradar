@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Viff.NeoRadar.Cdm;
+using Viff.NeoRadar.Tags;
 using Viff.NeoRadar.Tests.Fakes;
 using Viff.NeoRadar.Viff;
 using Xunit;
@@ -44,5 +46,32 @@ public sealed class LiveViffTests
         Console.WriteLine($"masters {masters.Count}, LFPG rate {capacity.Rate} taxi {capacity.TaxiMinutes}, " +
                           $"departures {departures.Count}, with TSAT {departures.Count(d => d.Cdm.Tsat.Length > 0)}, " +
                           $"network CTOTs {restricted.Count}, on the ground {restricted.Count(r => r.Atot.Length == 0)}");
+    }
+
+    [Fact]
+    public async Task LiveApi_ShowsLfpgDeparturesAsTheTagsWouldShowThem()
+    {
+        if (!s_enabled)
+        {
+            return;
+        }
+
+        using ViffApiClient api = new(new Uri("https://viff-system.network/"), "TEST", "vIFF-neoradar/tests", new FakeLogger());
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        CdmStore store = new();
+        store.SetMasters((await api.GetMastersAsync(CancellationToken.None))!);
+        store.SetNetworkCtots((await api.GetRestrictedAsync(CancellationToken.None))!);
+        store.SetCapacity("LFPG", await api.GetCapacityAsync("LFPG", CancellationToken.None), now);
+        store.ReplaceDepartures("LFPG", (await api.GetDeparturesAsync("LFPG", CancellationToken.None))!, now);
+
+        foreach (FlightView flight in store.Flights().OrderBy(f => f.Record.Cdm.Ttot))
+        {
+            FlightTags tags = CdmTagFormatter.Format(flight, now, flashOn: true);
+            string Show(CdmItem item) => tags.Items[item].Text;
+            Console.WriteLine(
+                $"{flight.Record.Callsign,-8} {flight.Record.Arrival,-4} E/TOBT {Show(CdmItem.Tobt),-4} TSAT {Show(CdmItem.Tsat),-4} " +
+                $"TTOT {Show(CdmItem.Ttot),-4} CTOT {Show(CdmItem.Ctot),-4} REG {Show(CdmItem.Regulation),-14} " +
+                $"ETFMS {Show(CdmItem.Etfms),-8} RDY {(tags.Ready ? "set" : "-")} window {tags.Tsat}");
+        }
     }
 }

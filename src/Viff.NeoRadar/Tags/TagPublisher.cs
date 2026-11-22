@@ -20,7 +20,7 @@ internal sealed class TagPublisher
         (CdmItem.Ttg, "TTG", "TTG", "Minutes until TSAT"),
         (CdmItem.Ttot, "TTOT", "TTOT", "Target take-off time"),
         (CdmItem.Ctot, "CTOT", "CTOT", "Calculated take-off time, red when it can no longer be met"),
-        (CdmItem.Etfms, "ETFMS", "ETFMS", "Network status: FLS-*, REA, SAM, SRM, SLC, DES or ACT"),
+        (CdmItem.Etfms, "ETFMS", "ETFMS", "Network status: a suspension (FLS-CDM, FLS-NRA, FLS-MR, FLS-GS), REA, SAM, SRM, SLC, DES or ACT"),
         (CdmItem.Ready, "RDY", "RDY", "Ready for start-up: green once RDY is set"),
         (CdmItem.Asrt, "ASRT", "ASRT", "Actual start-up request time"),
         (CdmItem.Asat, "ASAT", "ASAT", "Actual start-up approval time, as this client saw it"),
@@ -39,6 +39,7 @@ internal sealed class TagPublisher
     private string _readyId = string.Empty;
     private string _hasCtotId = string.Empty;
     private string _informedId = string.Empty;
+    private string _suspendedId = string.Empty;
     private string _tsatWindowId = string.Empty;
     private string _etfmsId = string.Empty;
 
@@ -74,8 +75,9 @@ internal sealed class TagPublisher
         _readyId = Declare(ExpressionDefinition.Boolean("Ready", false, "RDY is set"));
         _hasCtotId = Declare(ExpressionDefinition.Boolean("Has CTOT", false, "The flight has an ATFCM or manual CTOT"));
         _informedId = Declare(ExpressionDefinition.Boolean("Informed", false, "The pilot was sent the VDGS message"));
+        _suspendedId = Declare(ExpressionDefinition.Boolean("Suspended", false, "vIFF holds the flight plan suspended (FLS-CDM, FLS-NRA, FLS-MR, FLS-GS)"));
         _tsatWindowId = Declare(ExpressionDefinition.Text("TSAT Window", string.Empty,
-            "pending, future, window, closing or expired; empty when not a CDM flight or started"));
+            "pending, future, window, closing, expired or suspended; empty when not a CDM flight or started"));
         _etfmsId = Declare(ExpressionDefinition.Text("ETFMS", string.Empty, "The network status shown in the ETFMS item"));
     }
 
@@ -103,6 +105,7 @@ internal sealed class TagPublisher
                 PushExpression(_readyId, callsign, tags.Ready);
                 PushExpression(_hasCtotId, callsign, tags.HasCtot);
                 PushExpression(_informedId, callsign, tags.Informed);
+                PushExpression(_suspendedId, callsign, tags.Suspended);
                 PushExpression(_tsatWindowId, callsign, tags.Tsat == TsatState.None ? string.Empty : tags.Tsat.ToString().ToLowerInvariant());
                 PushExpression(_etfmsId, callsign, tags.Etfms);
             }
@@ -132,6 +135,7 @@ internal sealed class TagPublisher
         PushExpression(_readyId, callsign, false);
         PushExpression(_hasCtotId, callsign, false);
         PushExpression(_informedId, callsign, false);
+        PushExpression(_suspendedId, callsign, false);
         PushExpression(_tsatWindowId, callsign, string.Empty);
         PushExpression(_etfmsId, callsign, string.Empty);
     }

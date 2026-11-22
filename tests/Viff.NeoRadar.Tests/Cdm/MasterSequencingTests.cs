@@ -47,6 +47,7 @@ public sealed class MasterSequencingTests
         await RunAsync(TestData.Noon);
         _api.Writes.Clear();
         _api.Dpis.Clear();
+        Poll();
 
         await RunAsync(TestData.Noon.AddSeconds(15));
 
@@ -75,6 +76,7 @@ public sealed class MasterSequencingTests
         CdmDataUpdate write = Assert.Single(_api.Writes);
         Assert.Equal(("121500", "121500"), (write.Tobt, write.Tsat));
         Assert.Contains(("AFR1", "REQTOBT/NULL/NULL"), _api.Dpis);
+        Poll();
         Assert.Equal("P", Assert.Single(_store.Flights()).TobtSetBy);
     }
 
@@ -90,7 +92,7 @@ public sealed class MasterSequencingTests
     }
 
     [Fact]
-    public async Task RunAsync_RemovesAFlightFromTheSequenceSixMinutesAfterItsTsat()
+    public async Task RunAsync_SuspendsAFlightOnVIffSixMinutesAfterItsTsat()
     {
         Load(TestData.Departure("SLOW", "1140").WithCdm(c => c with { Tobt = "114000", Tsat = "115300", Ttot = "120300" }));
 
@@ -98,10 +100,52 @@ public sealed class MasterSequencingTests
 
         CdmDataUpdate write = Assert.Single(_api.Writes);
         Assert.Equal((string.Empty, string.Empty), (write.Tsat, write.Ttot));
+        Assert.Contains(("SLOW", "SUSP"), _api.Dpis);
+        Assert.Single(_notices);
 
         _api.Writes.Clear();
+        _api.Dpis.Clear();
+        Poll();
         await RunAsync(TestData.Noon.AddSeconds(15));
         Assert.Empty(_api.Writes);
+        Assert.Empty(_api.Dpis);
+    }
+
+    [Fact]
+    public async Task RunAsync_KeepsAFlightVIffHoldsSuspendedOutEvenForANewMaster()
+    {
+        Load(TestData.Departure("SLOW", "1140").WithCdm(c => c with { Tobt = "114000" }) with { CdmStatus = "FLS-CDM" });
+
+        await RunAsync(TestData.Noon);
+
+        Assert.Empty(_api.Writes);
+    }
+
+    [Fact]
+    public async Task RunAsync_LiftsAnFlsCdmSuspensionWhenTheTobtChangesAndSendsTheObt()
+    {
+        DepartureRecord suspended = TestData.Departure("SLOW", "1140") with { CdmStatus = "FLS-CDM", Ctot = "1230" };
+        Load(suspended.WithCdm(c => c with { Tobt = "114000", ReqTobt = "1205", ReqTobtType = "ATC" }));
+
+        await RunAsync(TestData.Noon);
+
+        CdmDataUpdate write = Assert.Single(_api.Writes);
+        Assert.Equal(("120500", "122000", "123000"), (write.Tobt, write.Tsat, write.Ttot));
+        Assert.Contains(("SLOW", "OBT/1220/10"), _api.Dpis);
+        Assert.Contains(("SLOW", "REQTOBT/NULL/NULL"), _api.Dpis);
+    }
+
+    [Fact]
+    public async Task RunAsync_LeavesANetworkSuspendedFlightOutAndUntouched()
+    {
+        Load(
+            TestData.Departure("HELD", "1210").WithCdm(c => c with { Tobt = "121000", Tsat = "121000", Ttot = "122000" }) with { CdmStatus = "FLS-NRA" },
+            TestData.Departure("NEXT", "1210"));
+
+        await RunAsync(TestData.Noon);
+
+        CdmDataUpdate write = Assert.Single(_api.Writes);
+        Assert.Equal(("NEXT", "122000"), (write.Callsign, write.Ttot));
     }
 
     [Fact]
@@ -182,7 +226,14 @@ public sealed class MasterSequencingTests
         Assert.DoesNotContain(_api.Dpis, d => d.Callsign == "AFR1" && d.Value.StartsWith("OBT/", StringComparison.Ordinal));
     }
 
-    private void Load(params DepartureRecord[] records) => _store.ReplaceDepartures("LFPG", records, TestData.Noon);
+    private void Load(params DepartureRecord[] records)
+    {
+        _api.Departures["LFPG"] = records.ToList();
+        Poll();
+    }
+
+    // Reads vIFF again, as the next sync cycle does.
+    private void Poll() => _store.ReplaceDepartures("LFPG", _api.Departures["LFPG"], TestData.Noon);
 
     private Task RunAsync(DateTimeOffset now) => _master.RunAsync("LFPG", TrafficSnapshot.Empty, now, CancellationToken.None);
 }

@@ -125,6 +125,12 @@ internal sealed class MasterSequencing
         DateTimeOffset now)
     {
         bool started = traffic.Started || record.Aobt.Length > 0;
+        if (!started && record.Suspension.Length > 0 && !record.IsCdmSuspended)
+        {
+            // Suspended by the network (FLS-NRA, FLS-MR, FLS-GS): out of the sequence, and its data is left as vIFF holds it.
+            return null;
+        }
+
         CdmData cdm = record.Cdm;
         List<string> clears = new();
         string tobtText = cdm.Tobt;
@@ -153,16 +159,30 @@ internal sealed class MasterSequencing
         }
 
         string tobtKey = CdmTime.Display(seed);
+        DateTimeOffset? currentTsat = CdmTime.ParseNear(cdm.Tsat, now);
+        DateTimeOffset? currentTtot = CdmTime.ParseNear(cdm.Ttot, now);
+        bool tsatPast = currentTsat is not null && now > currentTsat.Value + TsatExpiry;
+
+        // vIFF is the authority: a flight it holds FLS-CDM with no valid TSAT stays out, at the TOBT vIFF holds, even
+        // after this master restarts or takes over. Lifting it writes a fresh TSAT, so it is not taken back in here.
+        if (!started && record.IsCdmSuspended && (currentTsat is null || tsatPast))
+        {
+            string storedTobt = CdmTime.Display(cdm.Tobt.Length > 0 ? cdm.Tobt : record.Eobt.Length > 0 ? record.Eobt : traffic.Eobt);
+            _expired.TryAdd(record.Callsign, storedTobt);
+        }
+
+        bool lifting = false;
         if (_expired.TryGetValue(record.Callsign, out string? expiredTobt) && expiredTobt != tobtKey)
         {
             _expired.Remove(record.Callsign);
+            lifting = record.IsCdmSuspended;
         }
 
-        DateTimeOffset? currentTsat = CdmTime.ParseNear(cdm.Tsat, now);
-        DateTimeOffset? currentTtot = CdmTime.ParseNear(cdm.Ttot, now);
-        if (!started && asrt.Length == 0 && currentTsat is not null && now > currentTsat.Value + TsatExpiry)
+        bool suspending = false;
+        if (!started && asrt.Length == 0 && tsatPast && !_expired.ContainsKey(record.Callsign))
         {
             _expired[record.Callsign] = tobtKey;
+            suspending = !record.IsCdmSuspended;
         }
 
         bool excluded = !started && (_expired.ContainsKey(record.Callsign) || tobt.Value > now + TsatHorizon);
@@ -181,7 +201,7 @@ internal sealed class MasterSequencing
                 currentTtot,
                 Priority: cdm.Confirmed || setBy is not null || asrt.Length > 0);
 
-        return new PlannedFlight(record, CdmTime.ToHhmmss(tobt.Value), asrt, setBy, clears, exot, started, excluded, input);
+        return new PlannedFlight(record, CdmTime.ToHhmmss(tobt.Value), asrt, setBy, clears, exot, started, excluded, suspending, lifting, input);
     }
 
     private static int Exot(DepartureRecord record, TrafficEntry traffic, int defaultTaxi, IReadOnlyList<(string Name, int ExtraTaxiMinutes)> pads)
@@ -228,14 +248,21 @@ internal sealed class MasterSequencing
         bool? result = null;
         if (changed)
         {
+            // Nothing is kept locally: the next read of vIFF shows what was stored.
             result = await _api.SetCdmDataAsync(target, cancellationToken).ConfigureAwait(false);
             if (result == true)
             {
-                _store.Update(record.Callsign, target.ApplyTo);
-                if (tsatChanged && target.Tsat.Length > 0 && record.Ctot.Length == 0)
+                // The OBT lets ETFMS revise the CTOT; a flight leaving an FLS-CDM suspension sends it even with a CTOT.
+                if (tsatChanged && target.Tsat.Length > 0 && (record.Ctot.Length == 0 || plan.Lifting))
                 {
                     await _api.SendDpiAsync(record.Callsign, $"OBT/{CdmTime.Display(target.Tsat)}/{(int)plan.Exot.TotalMinutes}", cancellationToken)
                         .ConfigureAwait(false);
+                }
+
+                if (plan.Suspending)
+                {
+                    await _api.SendDpiAsync(record.Callsign, "SUSP", cancellationToken).ConfigureAwait(false);
+                    _notify($"{record.Callsign} missed its TSAT {CdmTime.Display(record.Cdm.Tsat)} and is suspended (FLS-CDM) until a new TOBT is set.");
                 }
             }
         }
@@ -274,5 +301,7 @@ internal sealed class MasterSequencing
         TimeSpan Exot,
         bool Started,
         bool Excluded,
+        bool Suspending,
+        bool Lifting,
         SequenceInput? Input);
 }

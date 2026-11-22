@@ -75,11 +75,28 @@ public sealed class CdmTagFormatterTests
     [InlineData("SAM", true, "", "REA")]
     [InlineData("ATC_ACTIV", false, "", "ACT")]
     [InlineData("", false, "REA", "REA")]
+    [InlineData("ATC_ACTIV", true, "FLS-CDM", "FLS-CDM")]
+    [InlineData("FLS-NRA", false, "COMPLY", "FLS-NRA")]
     public void Etfms_PutsSuspensionsFirstThenRea(string atfcmStatus, bool isRea, string cdmStatus, string expected)
     {
         DepartureRecord record = new() { AtfcmStatus = atfcmStatus, IsRea = isRea, CdmStatus = cdmStatus };
 
         Assert.Equal(expected, CdmTagFormatter.Etfms(record));
+    }
+
+    [Fact]
+    public void Format_ShowsASuspendedFlightPlanInRed()
+    {
+        DepartureRecord record = TestData.Departure("DLH3MY", "1155").WithCdm(c => c with { Tobt = "115500", Tsat = "115500" }) with { CdmStatus = "FLS-CDM" };
+
+        FlightTags tags = Format(record, s_cdmAirport);
+
+        Assert.True(tags.Suspended);
+        Assert.Equal(TsatState.Suspended, tags.Tsat);
+        Assert.Equal(("FLS-CDM", CdmTagFormatter.Red), (tags.Items[CdmItem.Etfms].Text, tags.Items[CdmItem.Etfms].Colour));
+        Assert.Equal(CdmTagFormatter.Red, tags.Items[CdmItem.Tsat].Colour);
+        Assert.Equal(CdmTagFormatter.Red, tags.Items[CdmItem.Tobt].Colour);
+        Assert.Equal(string.Empty, tags.Items[CdmItem.Ttg].Text);
     }
 
     private static FlightTags Format(DepartureRecord record, AirportView airport) =>
