@@ -26,10 +26,11 @@ namespace Viff.NeoRadar;
 /// </summary>
 public sealed class ViffCdmPlugin : BasePlugin
 {
-    private const string PluginVersion = "0.1.0";
+    private const string PluginVersion = "0.1.0-alpha";
     private const string DefaultApiUrl = "https://viff-system.network/";
 
-    // The key the open-source EuroScope CDM plugin sends; vIFF's write endpoints accept it.
+    // The placeholder key in the open-source EuroScope CDM plugin: vIFF reads accept it, writes refuse it (401), so
+    // a controller who writes sets the real key with .cdm apikey.
     private const string DefaultApiKey = "TEST";
     private const int DefaultRefreshSeconds = 15;
 
@@ -49,7 +50,7 @@ public sealed class ViffCdmPlugin : BasePlugin
 
     public override PluginManifest Manifest { get; } = new(
         Name: "vIFF CDM",
-        Author: "French vACC",
+        Author: "vIFF-neoradar contributors",
         Version: PluginVersion,
         SdkMajorVersion: PluginSdkVersion.Major,
         Description: "A-CDM and ATFCM departure management backed by vIFF: TOBT, TSAT, TTOT, CTOT, RDY and the CDM master role",
@@ -184,7 +185,19 @@ public sealed class ViffCdmPlugin : BasePlugin
         MasterRole master = new(api, store, sync, gate, scheduler, notifier, Changed);
         AirportPanel panel = new(core.Window.GetInterface(), store, sync, controls, master, gate, notifier);
         TagMenus tagMenus = new(core.Tag.GetInterface(), store, controls, actions, core.Logger);
-        CdmCommand command = new(store, sync, controls, master, panel, gate, notifier, clock, RequestSync);
+        CdmCommand command = new(store, sync, controls, master, panel, gate, notifier, clock, RequestSync, key =>
+        {
+            if (key is null)
+            {
+                settings.Remove("apiKey");
+            }
+            else
+            {
+                settings.Set("apiKey", key);
+            }
+
+            api.SetApiKey(key ?? DefaultApiKey);
+        });
 
         publisher.Register();
         tagMenus.Register();

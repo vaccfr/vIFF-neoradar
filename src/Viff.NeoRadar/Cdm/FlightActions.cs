@@ -289,6 +289,10 @@ internal sealed class FlightActions
                 _notifier.Toast(what, FeedbackKind.Success);
                 _changed();
             }
+            else if (_api.KeyRejected)
+            {
+                _notifier.Toast(MasterRole.KeyRejectedMessage, FeedbackKind.Error);
+            }
             else
             {
                 _notifier.Toast($"vIFF did not accept: {what}", FeedbackKind.Error);

@@ -33,6 +33,11 @@ internal interface IViffApi
     /// Sends a departure planning information message, such as "REA/1" or "OBT/1230/12".
     /// </summary>
     Task<bool> SendDpiAsync(string callsign, string value, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets a value indicating whether vIFF refused the API key on the last write (HTTP 401), so no write can succeed.
+    /// </summary>
+    bool KeyRejected { get; }
 }
 
 /// <summary>
@@ -42,13 +47,29 @@ internal sealed class ViffApiClient : IViffApi, IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILoggerApi _logger;
+    private volatile string _apiKey;
+    private volatile bool _keyRejected;
 
-    public ViffApiClient(Uri baseAddress, string apiKey, string userAgent, ILoggerApi logger)
+    /// <param name="handler">The HTTP handler, or null for the default; tests pass their own.</param>
+    public ViffApiClient(Uri baseAddress, string apiKey, string userAgent, ILoggerApi logger, HttpMessageHandler? handler = null)
     {
         _logger = logger;
-        _http = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(10) };
-        _http.DefaultRequestHeaders.Add("x-api-key", apiKey);
+        _apiKey = apiKey;
+        _http = handler is null ? new HttpClient() : new HttpClient(handler);
+        _http.BaseAddress = baseAddress;
+        _http.Timeout = TimeSpan.FromSeconds(10);
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+    }
+
+    public bool KeyRejected => _keyRejected;
+
+    /// <summary>
+    /// Replaces the API key sent from the next request on.
+    /// </summary>
+    public void SetApiKey(string apiKey)
+    {
+        _apiKey = apiKey;
+        _keyRejected = false;
     }
 
     public async Task<IReadOnlyList<DepartureRecord>?> GetDeparturesAsync(string icao, CancellationToken cancellationToken)
@@ -126,6 +147,7 @@ internal sealed class ViffApiClient : IViffApi, IDisposable
         try
         {
             using HttpRequestMessage request = new(method, path);
+            request.Headers.Add("x-api-key", _apiKey);
             if (method == HttpMethod.Post)
             {
                 request.Content = new StringContent(string.Empty);
@@ -133,6 +155,11 @@ internal sealed class ViffApiClient : IViffApi, IDisposable
 
             using HttpResponseMessage response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (method == HttpMethod.Post)
+            {
+                _keyRejected = response.StatusCode == System.Net.HttpStatusCode.Unauthorized;
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 _logger.Warning($"vIFF {method} {Redact(path)} returned {(int)response.StatusCode}: {Truncate(body)}");

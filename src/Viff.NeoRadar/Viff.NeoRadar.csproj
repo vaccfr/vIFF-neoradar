@@ -3,7 +3,7 @@
     <RootNamespace>Viff.NeoRadar</RootNamespace>
     <AssemblyName>Viff.NeoRadar</AssemblyName>
     <IsPackable>false</IsPackable>
-    <Version>0.1.0</Version>
+    <Version>0.1.0-alpha</Version>
   </PropertyGroup>
   <ItemGroup>
     <!-- Compile-only: the client supplies its own PluginSdk at runtime, so the plugin's output must not carry one. -->

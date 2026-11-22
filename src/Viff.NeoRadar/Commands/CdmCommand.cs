@@ -10,14 +10,14 @@ using Viff.NeoRadar.Panel;
 namespace Viff.NeoRadar.Commands;
 
 /// <summary>
-/// The <c>.cdm</c> chat command, with the subcommands of the French vACC CDM documentation.
+/// The <c>.cdm</c> chat command, with the CDM plugin's subcommands and a few of NeoRadar's own.
 /// </summary>
 internal sealed class CdmCommand : ICommandProvider
 {
     private static readonly string[] s_subcommands =
     {
         "master", "slave", "startupdelay", "departuredelay", "lvo", "rate", "deicepads",
-        "remarks", "rmkctot", "recover", "refresh", "panel", "status", "help",
+        "remarks", "rmkctot", "recover", "refresh", "panel", "status", "apikey", "help",
     };
 
     private static readonly string[] s_help =
@@ -33,6 +33,7 @@ internal sealed class CdmCommand : ICommandProvider
         ".cdm recover ICAO - read the airport's CDM data from vIFF again",
         ".cdm panel - open the CDM Airport Panel",
         ".cdm status - show the master of each watched airport",
+        ".cdm apikey KEY - set the vIFF API key writes need (.cdm apikey default returns to the built-in one)",
     };
 
     private readonly CdmStore _store;
@@ -44,6 +45,7 @@ internal sealed class CdmCommand : ICommandProvider
     private readonly Notifier _notifier;
     private readonly TimeProvider _clock;
     private readonly Action _requestSync;
+    private readonly Action<string?> _setApiKey;
 
     public CdmCommand(
         CdmStore store,
@@ -54,7 +56,8 @@ internal sealed class CdmCommand : ICommandProvider
         ConnectionGate gate,
         Notifier notifier,
         TimeProvider clock,
-        Action requestSync)
+        Action requestSync,
+        Action<string?> setApiKey)
     {
         _store = store;
         _sync = sync;
@@ -65,23 +68,25 @@ internal sealed class CdmCommand : ICommandProvider
         _notifier = notifier;
         _clock = clock;
         _requestSync = requestSync;
+        _setApiKey = setApiKey;
     }
 
     public static CommandDefinition Definition { get; } = new(
-        "vIFF CDM: master, slave, startupdelay, departuredelay, lvo, rate, deicepads, remarks, rmkctot, recover, refresh, panel, status, help",
+        "vIFF CDM: master, slave, startupdelay, departuredelay, lvo, rate, deicepads, remarks, rmkctot, recover, refresh, panel, status, apikey, help",
         new[]
         {
             new CommandParameter("action", ParameterType.String, Required: true, AllowedValues: s_subcommands),
-            new CommandParameter("airport", ParameterType.String, MaxLength: 12),
-            new CommandParameter("value", ParameterType.String, MaxLength: 64),
-            new CommandParameter("lvo", ParameterType.String, MaxLength: 4),
+            new CommandParameter("arg1", ParameterType.String, MaxLength: 256),
+            new CommandParameter("arg2", ParameterType.String, MaxLength: 64),
+            new CommandParameter("arg3", ParameterType.String, MaxLength: 4),
         });
 
     // Client threads.
     public CommandResult Execute(string commandId, IReadOnlyList<string> args)
     {
         string action = args.Count > 0 ? args[0].ToLowerInvariant() : "help";
-        string first = args.Count > 1 ? args[1].Trim().ToUpperInvariant() : string.Empty;
+        string rawFirst = args.Count > 1 ? args[1].Trim() : string.Empty;
+        string first = rawFirst.ToUpperInvariant();
         string second = args.Count > 2 ? args[2].Trim() : string.Empty;
         string third = args.Count > 3 ? args[3].Trim() : string.Empty;
 
@@ -155,6 +160,17 @@ internal sealed class CdmCommand : ICommandProvider
             case "status":
                 SayStatus();
                 return Ok(null);
+
+            case "apikey":
+                if (rawFirst.Length == 0)
+                {
+                    return Fail("Usage: .cdm apikey KEY (or .cdm apikey default)");
+                }
+
+                // The key is stored, never repeated in chat or the logs.
+                _setApiKey(string.Equals(rawFirst, "default", StringComparison.OrdinalIgnoreCase) ? null : rawFirst);
+                _requestSync();
+                return Ok("vIFF API key saved; writes use it from now on.");
 
             default:
                 foreach (string line in s_help)

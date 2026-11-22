@@ -39,6 +39,11 @@ internal sealed class CdmSync
     private readonly HashSet<string> _extraAirports = new(StringComparer.OrdinalIgnoreCase);
     private volatile TrafficSnapshot _latestTraffic = TrafficSnapshot.Empty;
 
+    // Only the sync job reads and writes these: while vIFF is down, cycles wait out a growing delay.
+    private static readonly TimeSpan s_maxBackoff = TimeSpan.FromMinutes(2);
+    private TimeSpan _backoff = TimeSpan.Zero;
+    private DateTimeOffset _retryAt = DateTimeOffset.MinValue;
+
     public CdmSync(
         IViffApi api,
         CdmStore store,
@@ -113,14 +118,26 @@ internal sealed class CdmSync
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         DateTimeOffset now = _clock.GetUtcNow();
+        if (now < _retryAt)
+        {
+            return;
+        }
+
         TrafficSnapshot traffic = _gate.Callsign.Length > 0 ? TrafficSnapshot.Read(_flightplans, _controllerData) : TrafficSnapshot.Empty;
         _latestTraffic = traffic;
 
         IReadOnlyList<MasterAirport>? masters = await _api.GetMastersAsync(cancellationToken).ConfigureAwait(false);
-        if (masters is not null)
+        if (masters is null)
         {
-            _store.SetMasters(masters);
+            // vIFF is unreachable or failing: stop this cycle rather than send every other read to it too.
+            _backoff = _backoff == TimeSpan.Zero ? TimeSpan.FromSeconds(30) : TimeSpan.FromTicks(Math.Min(_backoff.Ticks * 2, s_maxBackoff.Ticks));
+            _retryAt = now + _backoff;
+            return;
         }
+
+        _backoff = TimeSpan.Zero;
+        _retryAt = DateTimeOffset.MinValue;
+        _store.SetMasters(masters);
 
         IReadOnlyList<RestrictedFlight>? restricted = await _api.GetRestrictedAsync(cancellationToken).ConfigureAwait(false);
         if (restricted is not null)

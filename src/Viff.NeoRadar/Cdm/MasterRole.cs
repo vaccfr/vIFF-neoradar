@@ -107,6 +107,10 @@ internal sealed class MasterRole
                     _notifier.Say($"Connected as CDM master of {icao}.");
                     _notifier.Toast($"CDM master of {icao}", FeedbackKind.Success);
                 }
+                else if (_api.KeyRejected)
+                {
+                    _notifier.Say(KeyRejectedMessage, urgent: true);
+                }
                 else
                 {
                     _notifier.Say($"vIFF refused the master role of {icao}; another controller may hold it.", urgent: true);
@@ -196,9 +200,15 @@ internal sealed class MasterRole
         }
         else
         {
-            _notifier.Say($"vIFF did not release the master role of {icao}; try .cdm slave {icao} again.", urgent: true);
+            _notifier.Say(_api.KeyRejected ? KeyRejectedMessage : $"vIFF did not release the master role of {icao}; try .cdm slave {icao} again.", urgent: true);
         }
     }
+
+    /// <summary>
+    /// Gets what to tell the controller when vIFF refuses the API key.
+    /// </summary>
+    public const string KeyRejectedMessage =
+        "vIFF refused the API key, so nothing can be written (master, TOBT, RDY). Set the vIFF key with .cdm apikey <key>.";
 
     private bool BeginPending(string icao)
     {

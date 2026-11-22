@@ -46,6 +46,13 @@ internal sealed class FakeViffApi : IViffApi
 
     public bool Accept { get; set; } = true;
 
+    public bool KeyRejected { get; set; }
+
+    /// <summary>Gets or sets whether reads fail, as when vIFF is down.</summary>
+    public bool Down { get; set; }
+
+    public int MasterReads { get; private set; }
+
     public Task<IReadOnlyList<DepartureRecord>?> GetDeparturesAsync(string icao, CancellationToken cancellationToken)
     {
         lock (_lock)
@@ -62,8 +69,11 @@ internal sealed class FakeViffApi : IViffApi
     public Task<AirportCapacity?> GetCapacityAsync(string icao, CancellationToken cancellationToken) =>
         Task.FromResult(Capacities.GetValueOrDefault(icao));
 
-    public Task<IReadOnlyList<MasterAirport>?> GetMastersAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<MasterAirport>?>(Masters.ToList());
+    public Task<IReadOnlyList<MasterAirport>?> GetMastersAsync(CancellationToken cancellationToken)
+    {
+        MasterReads++;
+        return Task.FromResult<IReadOnlyList<MasterAirport>?>(Down ? null : Masters.ToList());
+    }
 
     public Task<bool> SetMasterAsync(string icao, string position, CancellationToken cancellationToken)
     {

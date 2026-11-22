@@ -7,7 +7,7 @@ using Viff.NeoRadar.Viff;
 namespace Viff.NeoRadar.Tags;
 
 /// <summary>
-/// Specifies a tag item the plugin registers; the names match the French vACC start-up list columns.
+/// Specifies a tag item the plugin registers; the names match the CDM plugin's columns.
 /// </summary>
 internal enum CdmItem
 {
@@ -73,7 +73,7 @@ internal sealed record FlightTags(
     string Etfms);
 
 /// <summary>
-/// Turns a flight's CDM data into tag texts and colours, following the French vACC CDM documentation.
+/// Turns a flight's CDM data into tag texts and colours, as the CDM plugin shows them.
 /// </summary>
 internal static class CdmTagFormatter
 {
