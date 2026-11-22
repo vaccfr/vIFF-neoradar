@@ -24,7 +24,7 @@ jobs:
             echo "NeoRadar.PluginSdk.dll must not be copied beside the plugin; the client would refuse to load it." >&2
             exit 1
           fi
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: Viff.NeoRadar
           path: |
