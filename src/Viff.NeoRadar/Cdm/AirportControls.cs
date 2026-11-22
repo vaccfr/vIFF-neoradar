@@ -22,6 +22,7 @@ internal sealed class AirportControls
     private readonly HashSet<string> _lvo = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _startupDelays = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _departureDelays = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _ctotIgnored = new(StringComparer.OrdinalIgnoreCase);
     private bool _tsatRemarks;
     private bool _ctotRemarks;
 
@@ -55,6 +56,37 @@ internal sealed class AirportControls
         {
             _ctotRemarks = !_ctotRemarks;
             return _ctotRemarks;
+        }
+    }
+
+    /// <summary>
+    /// Returns whether the master told the sequencer to ignore this flight's CTOT, as the CDM plugin's Disable CTOT.
+    /// </summary>
+    public bool IsCtotIgnored(string callsign)
+    {
+        lock (_lock)
+        {
+            return _ctotIgnored.Contains(callsign);
+        }
+    }
+
+    /// <summary>
+    /// Makes the sequencer ignore, or use again, a flight's CTOT, and returns whether it is now ignored.
+    /// </summary>
+    public bool SetCtotIgnored(string callsign, bool ignored)
+    {
+        lock (_lock)
+        {
+            if (ignored)
+            {
+                _ctotIgnored.Add(callsign);
+            }
+            else
+            {
+                _ctotIgnored.Remove(callsign);
+            }
+
+            return ignored;
         }
     }
 

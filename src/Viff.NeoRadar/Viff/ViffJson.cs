@@ -41,6 +41,7 @@ internal static class ViffJson
             records.Add(new DepartureRecord
             {
                 Callsign = callsign,
+                Cid = Text(item, "cid"),
                 Departure = Text(item, "departure"),
                 Arrival = Text(item, "arrival"),
                 Eobt = Text(item, "eobt"),
@@ -106,6 +107,70 @@ internal static class ViffJson
         }
 
         return flights;
+    }
+
+    /// <summary>
+    /// Parses an <c>/etfms/relevant</c> response, or returns null when it is not a JSON array.
+    /// </summary>
+    public static IReadOnlyList<RelevantFlight>? ParseRelevant(string json)
+    {
+        using JsonDocument? document = TryParse(json);
+        if (document is null || document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        List<RelevantFlight> flights = new();
+        foreach (JsonElement item in document.RootElement.EnumerateArray())
+        {
+            string callsign = Text(item, "callsign");
+            if (callsign.Length == 0)
+            {
+                continue;
+            }
+
+            JsonElement atfcm = Child(item, "atfcmData");
+            string regulation = Text(atfcm, "mostPenalisingRegulation");
+            flights.Add(new RelevantFlight(
+                callsign,
+                Text(item, "departure"),
+                Text(item, "arrival"),
+                Text(item, "eobt"),
+                Text(item, "tobt"),
+                Text(item, "ctot"),
+                regulation.Length > 0 ? regulation : Text(item, "mostPenalizingAirspace"),
+                Text(item, "atfcmStatus"),
+                Flag(atfcm, "informed") || Flag(item, "informed"),
+                Flag(atfcm, "isRea"),
+                Flag(item, "isCdm")));
+        }
+
+        return flights;
+    }
+
+    /// <summary>
+    /// Parses a list of objects into callsign → one text field, as <c>/ifps/allStatus</c> (cdmSts) and
+    /// <c>/ifps/allOnTime</c> (onTime) return them, or null when it is not a JSON array.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? ParseCallsignMap(string json, string field)
+    {
+        using JsonDocument? document = TryParse(json);
+        if (document is null || document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        Dictionary<string, string> map = new(StringComparer.OrdinalIgnoreCase);
+        foreach (JsonElement item in document.RootElement.EnumerateArray())
+        {
+            string callsign = Text(item, "callsign");
+            if (callsign.Length > 0)
+            {
+                map[callsign] = Text(item, field);
+            }
+        }
+
+        return map;
     }
 
     /// <summary>

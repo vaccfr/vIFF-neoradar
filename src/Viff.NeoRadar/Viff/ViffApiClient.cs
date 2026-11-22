@@ -23,6 +23,21 @@ internal interface IViffApi
 
     Task<IReadOnlyList<MasterAirport>?> GetMastersAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Gets vIFF's ATFCM list, filtered by a prefix of the departure, arrival or regulation (empty for all).
+    /// </summary>
+    Task<IReadOnlyList<RelevantFlight>?> GetRelevantAsync(string filter, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets each flight's network status, COMPLY, AIRB, REA or FLS-*.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>?> GetAllStatusAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets each airborne flight's deviation from its CTOT or ETOT in minutes, such as "+12.5" late or "-3.2" early.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>?> GetAllOnTimeAsync(CancellationToken cancellationToken);
+
     Task<bool> SetMasterAsync(string icao, string position, CancellationToken cancellationToken);
 
     Task<bool> RemoveMasterAsync(string icao, string position, CancellationToken cancellationToken);
@@ -88,6 +103,24 @@ internal sealed class ViffApiClient : IViffApi, IDisposable
     {
         string? body = await SendAsync(HttpMethod.Get, "etfms/restricted", cancellationToken).ConfigureAwait(false);
         return body is null ? null : Parsed(ViffJson.ParseRestricted(body), "regulated flights");
+    }
+
+    public async Task<IReadOnlyList<RelevantFlight>?> GetRelevantAsync(string filter, CancellationToken cancellationToken)
+    {
+        string? body = await SendAsync(HttpMethod.Get, $"etfms/relevant?filter={Escape(filter)}", cancellationToken).ConfigureAwait(false);
+        return body is null ? null : Parsed(ViffJson.ParseRelevant(body), "ATFCM flights");
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>?> GetAllStatusAsync(CancellationToken cancellationToken)
+    {
+        string? body = await SendAsync(HttpMethod.Get, "ifps/allStatus", cancellationToken).ConfigureAwait(false);
+        return body is null ? null : Parsed(ViffJson.ParseCallsignMap(body, "cdmSts"), "network statuses");
+    }
+
+    public async Task<IReadOnlyDictionary<string, string>?> GetAllOnTimeAsync(CancellationToken cancellationToken)
+    {
+        string? body = await SendAsync(HttpMethod.Get, "ifps/allOnTime", cancellationToken).ConfigureAwait(false);
+        return body is null ? null : Parsed(ViffJson.ParseCallsignMap(body, "onTime"), "on-time statuses");
     }
 
     public async Task<IReadOnlyList<MasterAirport>?> GetMastersAsync(CancellationToken cancellationToken)

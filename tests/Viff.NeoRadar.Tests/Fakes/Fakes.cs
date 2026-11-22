@@ -63,6 +63,26 @@ internal sealed class FakeViffApi : IViffApi
         return Task.FromResult<IReadOnlyList<DepartureRecord>?>(Departures.TryGetValue(icao, out List<DepartureRecord>? records) ? records.ToList() : new List<DepartureRecord>());
     }
 
+    public List<RelevantFlight> Relevant { get; } = new();
+
+    public Dictionary<string, string> Statuses { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public Dictionary<string, string> OnTime { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public List<string> RelevantFilters { get; } = new();
+
+    public Task<IReadOnlyList<RelevantFlight>?> GetRelevantAsync(string filter, CancellationToken cancellationToken)
+    {
+        RelevantFilters.Add(filter);
+        return Task.FromResult<IReadOnlyList<RelevantFlight>?>(Relevant.ToList());
+    }
+
+    public Task<IReadOnlyDictionary<string, string>?> GetAllStatusAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyDictionary<string, string>?>(new Dictionary<string, string>(Statuses));
+
+    public Task<IReadOnlyDictionary<string, string>?> GetAllOnTimeAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyDictionary<string, string>?>(new Dictionary<string, string>(OnTime));
+
     public Task<IReadOnlyList<RestrictedFlight>?> GetRestrictedAsync(CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<RestrictedFlight>?>(Restricted.ToList());
 

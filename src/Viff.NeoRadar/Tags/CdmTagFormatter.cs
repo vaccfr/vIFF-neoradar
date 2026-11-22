@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Viff.NeoRadar.Cdm;
 using Viff.NeoRadar.Common;
+using Viff.NeoRadar.Strips;
 using Viff.NeoRadar.Viff;
 
 namespace Viff.NeoRadar.Tags;
@@ -25,6 +26,20 @@ internal enum CdmItem
     Message,
     Regulation,
     Eobt,
+    Tsac,
+    Ctoc,
+    Phase,
+    Delay,
+    AutoStartup,
+    EventSlot,
+}
+
+/// <summary>
+/// Represents what the tags show beyond vIFF's record: the flight strip, a booked event slot and an ignored CTOT.
+/// </summary>
+internal sealed record FlightExtras(StripData Strip, string EventSlot, bool CtotIgnored)
+{
+    public static FlightExtras None { get; } = new(StripData.Empty, string.Empty, false);
 }
 
 /// <summary>
@@ -89,8 +104,10 @@ internal static class CdmTagFormatter
     /// <param name="flight">The flight.</param>
     /// <param name="now">The current time.</param>
     /// <param name="flashOn">Which half of the flash cycle to draw, alternating each second.</param>
-    public static FlightTags Format(FlightView flight, DateTimeOffset now, bool flashOn)
+    public static FlightTags Format(FlightView flight, DateTimeOffset now, bool flashOn, FlightExtras? extras = null)
     {
+        extras ??= FlightExtras.None;
+        StripData strip = extras.Strip;
         DepartureRecord record = flight.Record;
         bool isCdm = flight.Airport.IsCdm;
         bool started = flight.Asat is not null || record.Aobt.Length > 0;
@@ -104,11 +121,11 @@ internal static class CdmTagFormatter
         Dictionary<CdmItem, TagText> items = new()
         {
             [CdmItem.Tobt] = suspended ? Tobt(record, isCdm, now) with { Colour = Red } : Tobt(record, isCdm, now),
-            [CdmItem.SetBy] = new TagText(isCdm ? flight.TobtSetBy : string.Empty, CdmTagFormatter.DarkGreen),
+            [CdmItem.SetBy] = new TagText(isCdm ? (flight.TobtSetBy.Length > 0 ? flight.TobtSetBy : strip[StripData.SetBy]) : string.Empty, DarkGreen),
             [CdmItem.Tsat] = Tsat(state, tsat, flashOn),
             [CdmItem.Ttg] = Ttg(state, tsat, now),
             [CdmItem.Ttot] = new TagText(ttot is null ? string.Empty : CdmTime.ToHhmm(ttot.Value)),
-            [CdmItem.Ctot] = Ctot(record, ctot, ttot, now),
+            [CdmItem.Ctot] = extras.CtotIgnored && ctot.Length > 0 ? new TagText(ctot, Grey) : Ctot(record, ctot, ttot, now),
             [CdmItem.Etfms] = new TagText(etfms, EtfmsColour(etfms)),
             [CdmItem.Ready] = new TagText(flight.Watched ? "RDY" : string.Empty, record.Cdm.Asrt.Length > 0 ? DarkGreen : Red),
             [CdmItem.Asrt] = new TagText(CdmTime.Display(record.Cdm.Asrt)),
@@ -117,6 +134,17 @@ internal static class CdmTagFormatter
             [CdmItem.Message] = new TagText(isCdm && flight.Watched ? "MSG" : string.Empty, record.Informed ? DarkGreen : Red),
             [CdmItem.Regulation] = new TagText(ctot.Length > 0 ? (record.HasManualCtot ? CdmDataUpdate.ManualReason : record.Regulation) : string.Empty),
             [CdmItem.Eobt] = new TagText(CdmTime.Display(record.Eobt)),
+            [CdmItem.Tsac] = Tsac(strip[StripData.Tsac], tsat, now),
+            [CdmItem.Ctoc] = Ctoc(strip[StripData.Ctoc], ctot, now),
+            [CdmItem.Phase] = Phase(record, isCdm, started, state, now),
+            [CdmItem.Delay] = Delay(record, tsat, now),
+            [CdmItem.AutoStartup] = strip[StripData.AutoStartup] switch
+            {
+                StripData.AutoStartupArmed => new TagText("S", DarkGreen),
+                StripData.AutoStartupDone => new TagText("S", Grey),
+                _ => new TagText(string.Empty),
+            },
+            [CdmItem.EventSlot] = new TagText(extras.EventSlot, Grey),
         };
 
         return new FlightTags(items, isCdm, record.Cdm.Asrt.Length > 0, ctot.Length > 0, record.Informed, suspended, state, etfms);
@@ -166,6 +194,97 @@ internal static class CdmTagFormatter
 
         return status == "ATC_ACTIV" ? "ACT" : status;
     }
+
+    /// <summary>
+    /// Gets the TSAC: green within 5 minutes of the TSAT, orange further, "...." while it waits for the TSAT.
+    /// </summary>
+    public static TagText Tsac(string tsac, DateTimeOffset? tsat, DateTimeOffset now)
+    {
+        if (tsac == StripData.TsacPending)
+        {
+            return new TagText("....", Grey);
+        }
+
+        DateTimeOffset? communicated = CdmTime.ParseNear(tsac, now);
+        if (communicated is null)
+        {
+            return new TagText(string.Empty);
+        }
+
+        bool close = tsat is not null && (tsat.Value - communicated.Value).Duration() <= s_windowHalf;
+        return new TagText(CdmTime.ToHhmm(communicated.Value), close ? DarkGreen : Orange);
+    }
+
+    /// <summary>
+    /// Gets the CTOC and how the CTOT moved since: grey within 5 minutes, red when it is later, green when earlier,
+    /// and an orange X when the CTOT was cancelled.
+    /// </summary>
+    public static TagText Ctoc(string ctoc, string ctot, DateTimeOffset now)
+    {
+        DateTimeOffset? communicated = CdmTime.ParseNear(ctoc, now);
+        if (communicated is null)
+        {
+            return new TagText(string.Empty);
+        }
+
+        DateTimeOffset? current = CdmTime.ParseNear(ctot, now);
+        if (current is null)
+        {
+            return new TagText("X", Orange);
+        }
+
+        int moved = (int)Math.Round((current.Value - communicated.Value).TotalMinutes);
+        string text = CdmTime.ToHhmm(communicated.Value) + (moved == 0 ? string.Empty : moved > 0 ? $"+{moved}" : $"{moved}");
+        return new TagText(text, moved > 5 ? Red : moved < -5 ? DarkGreen : Grey);
+    }
+
+    private static TagText Phase(DepartureRecord record, bool isCdm, bool started, TsatState state, DateTimeOffset now)
+    {
+        if (!isCdm || started)
+        {
+            return new TagText(string.Empty);
+        }
+
+        if (state is TsatState.Expired or TsatState.Suspended)
+        {
+            return new TagText("I", Red);
+        }
+
+        DateTimeOffset? tobt = CdmTime.ParseNear(record.Cdm.Tobt.Length > 0 ? record.Cdm.Tobt : record.Eobt, now);
+        return tobt is not null && tobt.Value > now + MasterSequencing.TsatHorizon ? new TagText("P", DarkGreen) : new TagText("C", DarkGreen);
+    }
+
+    private static TagText Delay(DepartureRecord record, DateTimeOffset? tsat, DateTimeOffset now)
+    {
+        DateTimeOffset? tobt = CdmTime.ParseNear(record.Cdm.Tobt, now);
+        if (tsat is null || tobt is null)
+        {
+            return new TagText(string.Empty);
+        }
+
+        int minutes = (int)Math.Round((tsat.Value - tobt.Value).TotalMinutes);
+        return new TagText(minutes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Gets the airborne compliance letter: C (complied), A (connected airborne), empty otherwise.
+    /// </summary>
+    public static TagText Compliance(string status) => status switch
+    {
+        "COMPLY" => new TagText("C", DarkGreen),
+        "AIRB" => new TagText("A", Red),
+        _ => new TagText(string.Empty),
+    };
+
+    /// <summary>
+    /// Gets the airborne on-time deviation: "+12" late in red, "-3" early in green, empty when on time or unknown.
+    /// </summary>
+    public static TagText OnTime(int? minutes) => minutes switch
+    {
+        null or 0 => new TagText(string.Empty),
+        > 0 => new TagText($"+{minutes}", Red),
+        _ => new TagText($"{minutes}", DarkGreen),
+    };
 
     private static TagText Tobt(DepartureRecord record, bool isCdm, DateTimeOffset now)
     {

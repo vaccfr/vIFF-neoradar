@@ -49,11 +49,58 @@ internal sealed class FakeControllerDataApi : IControllerDataApi
 {
     public List<(string Callsign, string Text)> Scratchpads { get; } = new();
 
-    public IReadOnlyList<ControllerDataModel> GetAll() => Array.Empty<ControllerDataModel>();
+    /// <summary>Gets each aircraft's nine strip boxes, as the client holds them.</summary>
+    public Dictionary<string, string[]> Boxes { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public ControllerDataModel? GetByCallsign(string callsign) => null;
+    public List<(string Callsign, int Index, string Text)> StripWrites { get; } = new();
 
-    public bool SetGroundStatus(string callsign, GroundStatus groundStatus) => false;
+    public List<(string Callsign, GroundStatus Status)> GroundStatusWrites { get; } = new();
+
+    public Dictionary<string, ControllerDataModel> Models { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public bool RefuseStripWrites { get; set; }
+
+    public static ControllerDataModel Model(string callsign, bool cleared, GroundStatus status = GroundStatus.None, string owner = "", bool mine = false) =>
+        new(callsign, 0, string.Empty, 0, 0, 0, 0, string.Empty, string.Empty, string.Empty, cleared, mine, owner, string.Empty,
+            AssignedSpeedVariance.None, AttentionState.Unconcerned, status);
+
+    public IReadOnlyList<ControllerDataModel> GetAll() => Models.Values.ToList();
+
+    public ControllerDataModel? GetByCallsign(string callsign) => Models.GetValueOrDefault(callsign);
+
+    public bool SetGroundStatus(string callsign, GroundStatus groundStatus)
+    {
+        GroundStatusWrites.Add((callsign, groundStatus));
+        if (Models.TryGetValue(callsign, out ControllerDataModel? model))
+        {
+            Models[callsign] = model with { GroundStatus = groundStatus };
+        }
+
+        return true;
+    }
+
+    public IReadOnlyList<string>? GetFlightStripAnnotations(string callsign) =>
+        Boxes.TryGetValue(callsign, out string[]? boxes) ? boxes : Enumerable.Repeat(string.Empty, 9).ToArray();
+
+    public bool SetFlightStripAnnotation(string callsign, int index, string text)
+    {
+        StripWrites.Add((callsign, index, text));
+        if (RefuseStripWrites)
+        {
+            return false;
+        }
+
+        if (!Boxes.TryGetValue(callsign, out string[]? boxes))
+        {
+            boxes = Enumerable.Repeat(string.Empty, 9).ToArray();
+            Boxes[callsign] = boxes;
+        }
+
+        boxes[index] = text;
+        return true;
+    }
+
+    public bool PushFlightStrip(string callsign, string toController) => true;
 
     public bool SetAssignedSquawk(string callsign, string squawk) => false;
 

@@ -20,6 +20,18 @@ internal sealed class TagMenus
     private const string SetManualCtot = "manual-ctot";
     private const string RemoveManualCtot = "manual-ctot-off";
     private const string DeIcePrefix = "deice:";
+    private const string TsacSet = "tsac-set";
+    private const string TsacEdit = "tsac-edit";
+    private const string TsacOff = "tsac-off";
+    private const string CtocAdd = "ctoc-add";
+    private const string CtocEdit = "ctoc-edit";
+    private const string CtocOff = "ctoc-off";
+    private const string AutoStartup = "auto";
+    private const string CtotIgnore = "ctot-ignore";
+    private const string CtotUse = "ctot-use";
+    private const string EventSlotUse = "evslot";
+    private const string ReadyToggle = "rdy";
+    private const string ReadyWithRea = "rdy-rea";
 
     private readonly ITagInterface _tags;
     private readonly CdmStore _store;
@@ -36,9 +48,27 @@ internal sealed class TagMenus
     private string _ctotMenu = string.Empty;
     private string _etfmsMenu = string.Empty;
     private string _deIceMenu = string.Empty;
+    private string _tsac = string.Empty;
+    private string _tsacMenu = string.Empty;
+    private string _ctoc = string.Empty;
+    private string _ctocMenu = string.Empty;
+    private string _autoStartup = string.Empty;
+    private string _eventSlot = string.Empty;
+    private string _cdmMenu = string.Empty;
+    private readonly Func<DepartureRecord, string> _eventSlotOf;
+    private readonly Func<string, Strips.StripData> _stripOf;
 
-    public TagMenus(ITagInterface tags, CdmStore store, AirportControls controls, FlightActions actions, ILoggerApi logger)
+    public TagMenus(
+        ITagInterface tags,
+        CdmStore store,
+        AirportControls controls,
+        FlightActions actions,
+        ILoggerApi logger,
+        Func<DepartureRecord, string>? eventSlotOf = null,
+        Func<string, Strips.StripData>? stripOf = null)
     {
+        _eventSlotOf = eventSlotOf ?? (_ => string.Empty);
+        _stripOf = stripOf ?? (_ => Strips.StripData.Empty);
         _tags = tags;
         _store = store;
         _controls = controls;
@@ -57,6 +87,13 @@ internal sealed class TagMenus
         _ctotMenu = Action("CTOT Menu", false, "CTOT menu: request a revised CTOT, REA, manual CTOT");
         _etfmsMenu = Action("ETFMS Menu", false, "Network status menu: send or cancel REA");
         _deIceMenu = Action("DEICE Menu", false, "De-icing menu: none, on stand or a remote pad");
+        _tsac = Action("TSAC", false, "Sets the TSAC to the current TSAT");
+        _tsacMenu = Action("TSAC Menu", false, "TSAC menu: set to TSAT, edit, remove");
+        _ctoc = Action("CTOC", false, "Sets the CTOC to the current CTOT");
+        _ctocMenu = Action("CTOC Menu", false, "CTOC menu: set to CTOT, edit, remove");
+        _autoStartup = Action("AUTO STARTUP", false, "Arms or disarms automatic start-up");
+        _eventSlot = Action("EVSLOT", false, "Holds the flight to its booked event slot, as a manual CTOT");
+        _cdmMenu = Action("CDM Menu", false, "Every CDM action for the flight in one menu");
     }
 
     // Client threads.
@@ -78,6 +115,22 @@ internal sealed class TagMenus
         else if (evt.ActionId == _readyWithRea)
         {
             _actions.ToggleReady(callsign, withRea: true);
+        }
+        else if (evt.ActionId == _tsac)
+        {
+            _actions.SetTsac(callsign, null);
+        }
+        else if (evt.ActionId == _ctoc)
+        {
+            _actions.SetCtoc(callsign, null);
+        }
+        else if (evt.ActionId == _autoStartup)
+        {
+            _actions.ToggleAutoStartup(callsign);
+        }
+        else if (evt.ActionId == _eventSlot)
+        {
+            _actions.UseEventSlot(callsign);
         }
     }
 
@@ -125,6 +178,42 @@ internal sealed class TagMenus
                 break;
             case RemoveManualCtot:
                 _actions.SetManualCtot(callsign, string.Empty);
+                break;
+            case TsacSet:
+                _actions.SetTsac(callsign, null);
+                break;
+            case TsacEdit:
+                _actions.SetTsac(callsign, evt.UserInput ?? string.Empty);
+                break;
+            case TsacOff:
+                _actions.SetTsac(callsign, string.Empty);
+                break;
+            case CtocAdd:
+                _actions.SetCtoc(callsign, null);
+                break;
+            case CtocEdit:
+                _actions.SetCtoc(callsign, evt.UserInput ?? string.Empty);
+                break;
+            case CtocOff:
+                _actions.SetCtoc(callsign, string.Empty);
+                break;
+            case AutoStartup:
+                _actions.ToggleAutoStartup(callsign);
+                break;
+            case CtotIgnore:
+                _actions.SetCtotIgnored(callsign, ignored: true);
+                break;
+            case CtotUse:
+                _actions.SetCtotIgnored(callsign, ignored: false);
+                break;
+            case EventSlotUse:
+                _actions.UseEventSlot(callsign);
+                break;
+            case ReadyToggle:
+                _actions.ToggleReady(callsign, withRea: false);
+                break;
+            case ReadyWithRea:
+                _actions.ToggleReady(callsign, withRea: true);
                 break;
             default:
                 if (evt.ComponentId.StartsWith(DeIcePrefix, StringComparison.Ordinal))
@@ -175,6 +264,18 @@ internal sealed class TagMenus
                 components.Add(Button(RemoveManualCtot, "Remove manual CTOT"));
             }
 
+            string slot = _eventSlotOf(record);
+            if (slot.Length > 0)
+            {
+                components.Add(Button(EventSlotUse, $"Use event slot {slot} as CTOT"));
+            }
+
+            if (ctot.Length > 0)
+            {
+                bool ignored = _controls.IsCtotIgnored(record.Callsign);
+                components.Add(Button(ignored ? CtotUse : CtotIgnore, ignored ? "Use the CTOT in the sequence" : "Ignore the CTOT in the sequence"));
+            }
+
             return Menu(record.Callsign, components.ToArray());
         }
 
@@ -183,6 +284,51 @@ internal sealed class TagMenus
             return Menu(record.Callsign,
                 Label($"Status {CdmTagFormatter.Etfms(record)}"),
                 Button(rea ? CancelRea : SendRea, rea ? "Cancel REA" : "Send REA"));
+        }
+
+        if (actionId == _tsacMenu)
+        {
+            return Menu(record.Callsign,
+                Button(TsacSet, $"TSAC = TSAT {CdmTime.Display(record.Cdm.Tsat)}"),
+                Input(TsacEdit, "Edit TSAC (HHMM)"),
+                Button(TsacOff, "Remove TSAC"));
+        }
+
+        if (actionId == _ctocMenu)
+        {
+            return Menu(record.Callsign,
+                Button(CtocAdd, ctot.Length > 0 ? $"CTOC = CTOT {ctot}" : "Remove CTOC (no CTOT)"),
+                Input(CtocEdit, "Edit CTOC (HHMM)"),
+                Button(CtocOff, "Remove CTOC"));
+        }
+
+        if (actionId == _cdmMenu)
+        {
+            Strips.StripData strip = _stripOf(record.Callsign);
+            bool ready = record.Cdm.Asrt.Length > 0;
+            bool armed = strip[Strips.StripData.AutoStartup] == Strips.StripData.AutoStartupArmed;
+            List<DropdownComponent> all = new()
+            {
+                Button(ReadyTobt, ctot.Length > 0 ? $"Ready {word} + REA" : $"Ready {word}"),
+                Input(EditTobt, $"Edit {word} (HHMM)"),
+                new DropdownComponent { Type = DropdownComponentType.Divider },
+                Button(ReadyToggle, ready ? "Clear RDY" : "Set RDY"),
+                Button(ReadyWithRea, "Set RDY + REA"),
+                Button(rea ? CancelRea : SendRea, rea ? "Cancel REA" : "Send REA"),
+                new DropdownComponent { Type = DropdownComponentType.Divider },
+                Button(TsacSet, "TSAC = TSAT"),
+                Button(TsacOff, "Remove TSAC"),
+                Button(CtocAdd, "CTOC = CTOT"),
+                Button(CtocOff, "Remove CTOC"),
+                Button(AutoStartup, armed ? "Disarm automatic start-up" : "Arm automatic start-up"),
+            };
+            string slot = _eventSlotOf(record);
+            if (slot.Length > 0)
+            {
+                all.Add(Button(EventSlotUse, $"Use event slot {slot} as CTOT"));
+            }
+
+            return Menu(record.Callsign, all.ToArray());
         }
 
         if (actionId == _deIceMenu)

@@ -49,6 +49,35 @@ public sealed class LiveViffTests
     }
 
     [Fact]
+    public async Task LiveApi_ReadsTheAtfcmListStatusesAndTheSlotsFile()
+    {
+        if (!s_enabled)
+        {
+            return;
+        }
+
+        FakeLogger logger = new();
+        using ViffApiClient api = new(new Uri("https://viff-system.network/"), "TEST", "vIFF-neoradar/tests", logger);
+        using RemoteText remote = new(new Uri(RemoteText.DefaultBaseUrl), "vIFF-neoradar/tests", logger);
+
+        IReadOnlyList<RelevantFlight>? relevant = await api.GetRelevantAsync(string.Empty, CancellationToken.None);
+        IReadOnlyDictionary<string, string>? statuses = await api.GetAllStatusAsync(CancellationToken.None);
+        IReadOnlyDictionary<string, string>? onTime = await api.GetAllOnTimeAsync(CancellationToken.None);
+        string? slotsFile = await remote.GetAsync("ctot.txt", CancellationToken.None);
+
+        Assert.NotNull(relevant);
+        Assert.NotNull(statuses);
+        Assert.NotNull(onTime);
+        Assert.NotNull(slotsFile);
+        Assert.DoesNotContain(logger.Lines, l => l.StartsWith("Warning", StringComparison.Ordinal));
+        NetworkStatuses network = new();
+        network.Replace(statuses, onTime);
+        int parsedOnTime = onTime.Keys.Count(c => network.OnTimeOf(c) is not null);
+        Console.WriteLine($"ATFCM list {relevant.Count}, statuses {statuses.Count}, on-time {onTime.Count} ({parsedOnTime} parsed), " +
+                          $"event slots {EventSlots.Parse(slotsFile).Count}");
+    }
+
+    [Fact]
     public async Task LiveApi_ShowsLfpgDeparturesAsTheTagsWouldShowThem()
     {
         if (!s_enabled)

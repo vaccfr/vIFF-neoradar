@@ -16,6 +16,7 @@ using Viff.NeoRadar.Cdm;
 using Viff.NeoRadar.Commands;
 using Viff.NeoRadar.Common;
 using Viff.NeoRadar.Panel;
+using Viff.NeoRadar.Strips;
 using Viff.NeoRadar.Tags;
 using Viff.NeoRadar.Viff;
 
@@ -46,8 +47,12 @@ public sealed class ViffCdmPlugin : BasePlugin
     private TagMenus? _tagMenus;
     private MasterRole? _master;
     private AirportPanel? _panel;
+    private AtfcmList? _atfcm;
+    private StripStore? _strips;
+    private RemoteText? _remote;
     private string _commandId = string.Empty;
     private string _panelMenuId = string.Empty;
+    private string _atfcmMenuId = string.Empty;
 
     public override PluginManifest Manifest { get; } = new(
         Name: "vIFF CDM",
@@ -79,6 +84,7 @@ public sealed class ViffCdmPlugin : BasePlugin
             _scheduler?.Stop(TimeSpan.FromSeconds(2));
             _master?.ReleaseAll(TimeSpan.FromSeconds(2));
             _panel?.Close();
+            _atfcm?.Close();
             if (_commandId.Length > 0)
             {
                 _chat?.UnregisterCommand(_commandId);
@@ -89,7 +95,13 @@ public sealed class ViffCdmPlugin : BasePlugin
                 _menu?.RemoveMenuItem(_panelMenuId);
             }
 
+            if (_atfcmMenuId.Length > 0)
+            {
+                _menu?.RemoveMenuItem(_atfcmMenuId);
+            }
+
             _api?.Dispose();
+            _remote?.Dispose();
         });
 
         _scheduler = null;
@@ -100,6 +112,9 @@ public sealed class ViffCdmPlugin : BasePlugin
         _tagMenus = null;
         _master = null;
         _panel = null;
+        _atfcm = null;
+        _strips = null;
+        _remote = null;
     }
 
     public override void OnTimer(TimerEvent evt) => Guard(nameof(OnTimer), () => _scheduler?.Tick());
@@ -115,7 +130,11 @@ public sealed class ViffCdmPlugin : BasePlugin
 
     public override void OnTagDropdownAction(DropdownActionEvent evt) => Guard(nameof(OnTagDropdownAction), () => _tagMenus?.OnTagDropdownAction(evt));
 
-    public override void OnWindowEvent(WindowEvent evt) => Guard(nameof(OnWindowEvent), () => _panel?.OnWindowEvent(evt));
+    public override void OnWindowEvent(WindowEvent evt) => Guard(nameof(OnWindowEvent), () =>
+    {
+        _panel?.OnWindowEvent(evt);
+        _atfcm?.OnWindowEvent(evt);
+    });
 
     public override void OnMenuItemClicked(MenuItemClickedEvent evt) => Guard(nameof(OnMenuItemClicked), () =>
     {
@@ -123,7 +142,17 @@ public sealed class ViffCdmPlugin : BasePlugin
         {
             _panel?.Open();
         }
+        else if (evt.ItemId == _atfcmMenuId)
+        {
+            _atfcm?.Open();
+        }
     });
+
+    public override void OnFlightStripAnnotationsChanged(FlightStripAnnotationsChangedEvent evt) =>
+        Guard(nameof(OnFlightStripAnnotationsChanged), () => RefreshStrip(evt.Callsign));
+
+    public override void OnFlightStripPushed(FlightStripPushedEvent evt) =>
+        Guard(nameof(OnFlightStripPushed), () => RefreshStrip(evt.Callsign));
 
     public override void OnFsdConnected(FsdConnectedEvent evt) => Guard(nameof(OnFsdConnected), () =>
     {
@@ -165,6 +194,8 @@ public sealed class ViffCdmPlugin : BasePlugin
         string apiKey = settingsKey ?? BuiltInApiKey;
         string keySource = settingsKey is not null ? "set with .cdm apikey" : BuildSecrets.ApiKey.Length > 0 ? "built in" : "placeholder, read only";
         int refreshSeconds = int.TryParse(settings.Get("refreshSeconds"), out int seconds) && seconds >= 5 ? seconds : DefaultRefreshSeconds;
+        Uri configUrl = ReadHttpsUrl(settings.Get("cdmConfigUrl"), RemoteText.DefaultBaseUrl, "cdmConfigUrl");
+        bool readySetTsac = !string.Equals(settings.Get("readySetTsac"), "false", StringComparison.OrdinalIgnoreCase);
 
         JobScheduler scheduler = new(clock, core.Logger);
         ViffApiClient api = new(apiUrl, apiKey, $"vIFF-neoradar/{PluginVersion}", core.Logger);
@@ -172,9 +203,26 @@ public sealed class ViffCdmPlugin : BasePlugin
         ConnectionGate gate = new(core.Fsd);
         CdmStore store = new();
         AirportControls controls = new(settings);
-        MasterSequencing sequencing = new(api, store, controls, core.Logger, message => notifier.Say(message));
-        CdmSync sync = new(api, store, controls, sequencing, gate, core.Airport, core.Flightplan, core.ControllerData, clock);
+        RemoteText remote = new(configUrl, $"vIFF-neoradar/{PluginVersion}", core.Logger);
+        EventSlots slots = new();
+        NetworkStatuses statuses = new();
+        StripStore strips = new(core.ControllerData);
+        StripWriter stripWriter = new(strips, core.ControllerData, core.Logger);
+        StripSync stripSync = new(strips, stripWriter, core.ControllerData, notifier);
+        MasterSequencing sequencing = new(api, store, controls, core.Logger, message => notifier.Say(message), slots);
+        CdmSync sync = new(api, store, controls, sequencing, gate, core.Airport, core.Flightplan, core.ControllerData, clock, remote, slots, statuses);
         TagPublisher publisher = new(core.Tag.GetInterface(), core.Expressions, core.Logger);
+
+        FlightExtras ExtrasOf(FlightView flight) => new(
+            stripWriter.Current(flight.Record.Callsign),
+            slots.Find(flight.Record.Cid, flight.Record.Callsign, flight.Record.Departure, flight.Record.Arrival),
+            controls.IsCtotIgnored(flight.Record.Callsign));
+
+        void PublishAll()
+        {
+            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow(), ExtrasOf);
+            publisher.PublishCompliance(sync.LatestTraffic.Callsigns, statuses);
+        }
 
         void Changed()
         {
@@ -183,15 +231,17 @@ public sealed class ViffCdmPlugin : BasePlugin
                 return;
             }
 
-            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
+            PublishAll();
             _panel?.Refresh();
             RequestSync();
         }
 
-        FlightActions actions = new(api, store, gate, scheduler, notifier, clock, Changed);
+        FlightActions actions = new(api, store, gate, scheduler, notifier, clock, Changed, stripWriter, controls, slots, readySetTsac);
         MasterRole master = new(api, store, sync, gate, scheduler, notifier, Changed);
         AirportPanel panel = new(core.Window.GetInterface(), store, sync, controls, master, gate, notifier);
-        TagMenus tagMenus = new(core.Tag.GetInterface(), store, controls, actions, core.Logger);
+        AtfcmList atfcm = new(core.Window.GetInterface(), api, core.Focus, settings, gate, scheduler);
+        TagMenus tagMenus = new(core.Tag.GetInterface(), store, controls, actions, core.Logger,
+            record => slots.Find(record.Cid, record.Callsign, record.Departure, record.Arrival), stripWriter.Current);
         CdmCommand command = new(store, sync, controls, master, panel, gate, notifier, clock, RequestSync, key =>
         {
             if (key is null)
@@ -204,7 +254,7 @@ public sealed class ViffCdmPlugin : BasePlugin
             }
 
             api.SetApiKey(key ?? BuiltInApiKey);
-        });
+        }, atfcm.Open);
 
         publisher.Register();
         tagMenus.Register();
@@ -215,11 +265,19 @@ public sealed class ViffCdmPlugin : BasePlugin
         }
 
         _panelMenuId = core.Menu.RegisterMenuItem(new MenuItemDefinition("Airport Panel", "CDM Airport Panel"));
+        _atfcmMenuId = core.Menu.RegisterMenuItem(new MenuItemDefinition("ATFCM List", "ATFCM Flight List"));
 
         sync.Synced += () =>
         {
             master.NoteConnected();
-            publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
+            IReadOnlyList<FlightView> flights = store.Flights();
+            stripSync.Track(flights);
+            if (gate.CanWrite(out string me, out _))
+            {
+                stripSync.Mirror(flights, new HashSet<string>(store.AirportsMasteredBy(me), StringComparer.OrdinalIgnoreCase));
+            }
+
+            PublishAll();
             panel.Refresh();
         };
 
@@ -230,16 +288,37 @@ public sealed class ViffCdmPlugin : BasePlugin
         _tagMenus = tagMenus;
         _master = master;
         _panel = panel;
+        _atfcm = atfcm;
+        _strips = strips;
+        _remote = remote;
         _syncJob = scheduler.Every("sync", TimeSpan.FromSeconds(refreshSeconds), sync.RunAsync);
         scheduler.Every("tags", TimeSpan.FromSeconds(1), ct =>
         {
             if (!ct.IsCancellationRequested)
             {
-                publisher.Publish(AllFlights(store, sync), clock.GetUtcNow());
+                PublishAll();
             }
 
             return System.Threading.Tasks.Task.CompletedTask;
         });
+
+        // One strip write a second, the client's limit; the master also sets STUP for armed flights in their window.
+        scheduler.Every("strips", TimeSpan.FromSeconds(1), ct =>
+        {
+            if (ct.IsCancellationRequested)
+            {
+                return System.Threading.Tasks.Task.CompletedTask;
+            }
+
+            stripWriter.Tick();
+            if (gate.CanWrite(out string me, out _))
+            {
+                stripSync.RunAutoStartup(store.Flights(), new HashSet<string>(store.AirportsMasteredBy(me), StringComparer.OrdinalIgnoreCase), clock.GetUtcNow());
+            }
+
+            return System.Threading.Tasks.Task.CompletedTask;
+        });
+        scheduler.Every("atfcm", TimeSpan.FromMinutes(1), ct => atfcm.IsOpen ? atfcm.RefreshAsync(ct) : System.Threading.Tasks.Task.CompletedTask);
 
         core.Logger.Info($"vIFF CDM {PluginVersion} reading {apiUrl} every {refreshSeconds} s, API key {keySource}");
     }
@@ -248,6 +327,31 @@ public sealed class ViffCdmPlugin : BasePlugin
         store.Flights().Concat(store.NetworkFlights(sync.LatestTraffic)).ToList();
 
     private static string BuiltInApiKey => BuildSecrets.ApiKey.Length > 0 ? BuildSecrets.ApiKey : PlaceholderApiKey;
+
+    private void RefreshStrip(string callsign)
+    {
+        if (_store?.Find(callsign) is not null)
+        {
+            _strips?.Refresh(callsign);
+        }
+    }
+
+    private Uri ReadHttpsUrl(string? configured, string fallback, string setting)
+    {
+        if (!string.IsNullOrWhiteSpace(configured) &&
+            Uri.TryCreate(configured.EndsWith('/') ? configured : configured + "/", UriKind.Absolute, out Uri? uri) &&
+            uri.Scheme == Uri.UriSchemeHttps)
+        {
+            return uri;
+        }
+
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            _logger?.Warning($"Ignoring the {setting} setting '{configured}'; it must be an https URL");
+        }
+
+        return new Uri(fallback);
+    }
 
     private void RequestSync()
     {

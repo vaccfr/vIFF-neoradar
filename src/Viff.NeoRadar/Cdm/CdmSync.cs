@@ -21,6 +21,9 @@ internal sealed class CdmSync
 {
     private static readonly TimeSpan s_capacityRefresh = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan s_networkAirportRefresh = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan s_statusRefresh = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan s_slotsRefresh = TimeSpan.FromMinutes(5);
+    private const string SlotsFile = "ctot.txt";
     private const int MaxNetworkAirportsPerCycle = 6;
     private const int MaxScratchpadWritesPerCycle = 4;
 
@@ -33,6 +36,11 @@ internal sealed class CdmSync
     private readonly IFlightplanApi _flightplans;
     private readonly IControllerDataApi _controllerData;
     private readonly TimeProvider _clock;
+    private readonly IRemoteText? _remote;
+    private readonly EventSlots? _slots;
+    private readonly NetworkStatuses? _statuses;
+    private DateTimeOffset _statusesReadAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _slotsReadAt = DateTimeOffset.MinValue;
 
     // Airports named in a .cdm command that the airport configuration does not hold; read by the command thread too.
     private readonly object _lock = new();
@@ -53,8 +61,14 @@ internal sealed class CdmSync
         IAirportApi airports,
         IFlightplanApi flightplans,
         IControllerDataApi controllerData,
-        TimeProvider clock)
+        TimeProvider clock,
+        IRemoteText? remote = null,
+        EventSlots? slots = null,
+        NetworkStatuses? statuses = null)
     {
+        _remote = remote;
+        _slots = slots;
+        _statuses = statuses;
         _api = api;
         _store = store;
         _controls = controls;
@@ -164,6 +178,7 @@ internal sealed class CdmSync
         HashSet<string> watchedSet = new(watched, StringComparer.OrdinalIgnoreCase);
         _store.RetainAirports(watchedSet);
         await ReadNetworkAirportsAsync(traffic, watchedSet, now, cancellationToken).ConfigureAwait(false);
+        await ReadStatusesAndSlotsAsync(now, cancellationToken).ConfigureAwait(false);
         foreach (FlightView flight in _store.Flights())
         {
             if (traffic[flight.Record.Callsign].Started && flight.Asat is null)
@@ -186,6 +201,28 @@ internal sealed class CdmSync
 
         cancellationToken.ThrowIfCancellationRequested();
         Synced?.Invoke();
+    }
+
+    // Network statuses feed the airborne compliance items; event slots come from the vACC's slots file.
+    private async Task ReadStatusesAndSlotsAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (_statuses is not null && now - _statusesReadAt >= s_statusRefresh)
+        {
+            _statusesReadAt = now;
+            IReadOnlyDictionary<string, string>? statuses = await _api.GetAllStatusAsync(cancellationToken).ConfigureAwait(false);
+            IReadOnlyDictionary<string, string>? onTime = await _api.GetAllOnTimeAsync(cancellationToken).ConfigureAwait(false);
+            _statuses.Replace(statuses, onTime);
+        }
+
+        if (_remote is not null && _slots is not null && now - _slotsReadAt >= s_slotsRefresh)
+        {
+            _slotsReadAt = now;
+            string? text = await _remote.GetAsync(SlotsFile, cancellationToken).ConfigureAwait(false);
+            if (text is not null)
+            {
+                _slots.Replace(EventSlots.Parse(text));
+            }
+        }
     }
 
     // Reads the departures of other airports with a master that the client has traffic from, so their TSATs show.

@@ -28,13 +28,15 @@ internal sealed class MasterSequencing
     private readonly AirportControls _controls;
     private readonly ILoggerApi _logger;
     private readonly Action<string> _notify;
+    private readonly EventSlots? _slots;
 
     // Callsign to the TOBT ("HHMM") whose TSAT expired; the flight stays out of the sequence until its TOBT changes.
     private readonly Dictionary<string, string> _expired = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _warned = new(StringComparer.Ordinal);
 
-    public MasterSequencing(IViffApi api, CdmStore store, AirportControls controls, ILoggerApi logger, Action<string> notify)
+    public MasterSequencing(IViffApi api, CdmStore store, AirportControls controls, ILoggerApi logger, Action<string> notify, EventSlots? slots = null)
     {
+        _slots = slots;
         _api = api;
         _store = store;
         _controls = controls;
@@ -187,7 +189,8 @@ internal sealed class MasterSequencing
 
         bool excluded = !started && (_expired.ContainsKey(record.Callsign) || tobt.Value > now + TsatHorizon);
         TimeSpan exot = TimeSpan.FromMinutes(Exot(record, traffic, defaultTaxi, pads));
-        DateTimeOffset? ctot = CdmTime.ParseNear(record.EffectiveCtot, now);
+        DateTimeOffset? ctot = _controls.IsCtotIgnored(record.Callsign) ? null : CdmTime.ParseNear(record.EffectiveCtot, now);
+        bool eventSlot = _slots?.Find(record.Cid, record.Callsign, record.Departure, record.Arrival).Length > 0;
         SequenceInput? input = excluded
             ? null
             : new SequenceInput(
@@ -199,7 +202,7 @@ internal sealed class MasterSequencing
                 started,
                 currentTsat,
                 currentTtot,
-                Priority: cdm.Confirmed || setBy is not null || asrt.Length > 0);
+                Priority: cdm.Confirmed || setBy is not null || asrt.Length > 0 || eventSlot);
 
         return new PlannedFlight(record, CdmTime.ToHhmmss(tobt.Value), asrt, setBy, clears, exot, started, excluded, suspending, lifting, input);
     }

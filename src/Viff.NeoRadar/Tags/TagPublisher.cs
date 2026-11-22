@@ -28,12 +28,20 @@ internal sealed class TagPublisher
         (CdmItem.Message, "MSG", "MSG", "VDGS message status: green once the pilot was informed"),
         (CdmItem.Regulation, "REG", "REG", "The regulation behind the CTOT, or MANUAL"),
         (CdmItem.Eobt, "EOBT", "EOBT", "The EOBT filed in the flight plan"),
+        (CdmItem.Tsac, "TSAC", "TSAC", "TSAT communicated to the pilot: green within 5 minutes of the TSAT, orange further"),
+        (CdmItem.Ctoc, "CTOC", "CTOC", "CTOT communicated to the pilot, and how far the CTOT moved since"),
+        (CdmItem.Phase, "E", "E", "CDM phase: P planned (TOBT beyond 35 minutes), C in the CDM window, I invalid (TSAT expired or suspended)"),
+        (CdmItem.Delay, "DLY", "DLY", "Start-up delay in minutes, TSAT minus TOBT"),
+        (CdmItem.AutoStartup, "AUTO", "AUTO", "Automatic start-up: S armed (green) or done (grey)"),
+        (CdmItem.EventSlot, "EVSLOT", "EVSLOT", "The event slot booked for the flight"),
     };
 
     private readonly ITagInterface _tags;
     private readonly IExpressionApi _expressions;
     private readonly ILoggerApi _logger;
     private readonly Dictionary<CdmItem, string> _itemIds = new();
+    private string _complyId = string.Empty;
+    private string _onTimeId = string.Empty;
     private string _isCdmId = string.Empty;
     private string _listedId = string.Empty;
     private string _readyId = string.Empty;
@@ -48,6 +56,7 @@ internal sealed class TagPublisher
     private readonly Dictionary<(string Id, string Callsign), TagText> _pushedItems = new();
     private readonly Dictionary<(string Id, string Callsign), string> _pushedExpressions = new();
     private readonly HashSet<string> _published = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _complianceShown = new(StringComparer.OrdinalIgnoreCase);
 
     public TagPublisher(ITagInterface tags, IExpressionApi expressions, ILoggerApi logger)
     {
@@ -69,6 +78,9 @@ internal sealed class TagPublisher
             _itemIds[item] = id;
         }
 
+        _complyId = Register("COMPLY", "COMPLY", "Airborne compliance: C took off in its window, A connected airborne");
+        _onTimeId = Register("ONTIME", "ONTIME", "Airborne deviation from the CTOT or ETOT in minutes: + late in red, - early in green");
+
         _isCdmId = Declare(ExpressionDefinition.Boolean("Is CDM", false, "The departure airport runs CDM on vIFF"));
         _listedId = Declare(ExpressionDefinition.Boolean("Listed", false,
             "A departure from one of the client's airports, not yet airborne; false for flights from elsewhere"));
@@ -84,7 +96,7 @@ internal sealed class TagPublisher
     /// <summary>
     /// Pushes every flight's values, and resets those of flights no longer listed.
     /// </summary>
-    public void Publish(IReadOnlyList<FlightView> flights, DateTimeOffset now)
+    public void Publish(IReadOnlyList<FlightView> flights, DateTimeOffset now, Func<FlightView, FlightExtras>? extras = null)
     {
         bool flashOn = now.Second % 2 == 0;
         lock (_lock)
@@ -94,7 +106,7 @@ internal sealed class TagPublisher
             {
                 string callsign = flight.Record.Callsign;
                 current.Add(callsign);
-                FlightTags tags = CdmTagFormatter.Format(flight, now, flashOn);
+                FlightTags tags = CdmTagFormatter.Format(flight, now, flashOn, extras?.Invoke(flight));
                 foreach (KeyValuePair<CdmItem, TagText> item in tags.Items)
                 {
                     PushItem(_itemIds[item.Key], callsign, item.Value);
@@ -121,6 +133,53 @@ internal sealed class TagPublisher
             _published.Clear();
             _published.UnionWith(current);
         }
+    }
+
+    /// <summary>
+    /// Pushes the airborne compliance items for every flight the client holds that vIFF has a status for.
+    /// </summary>
+    public void PublishCompliance(IEnumerable<string> callsigns, NetworkStatuses statuses)
+    {
+        lock (_lock)
+        {
+            HashSet<string> current = new(StringComparer.OrdinalIgnoreCase);
+            foreach (string callsign in callsigns)
+            {
+                TagText comply = CdmTagFormatter.Compliance(statuses.StatusOf(callsign));
+                TagText onTime = CdmTagFormatter.OnTime(statuses.OnTimeOf(callsign));
+                if (comply.Text.Length == 0 && onTime.Text.Length == 0 && !_complianceShown.Contains(callsign))
+                {
+                    continue;
+                }
+
+                current.Add(callsign);
+                PushItem(_complyId, callsign, comply);
+                PushItem(_onTimeId, callsign, onTime);
+            }
+
+            foreach (string gone in _complianceShown)
+            {
+                if (!current.Contains(gone))
+                {
+                    PushItem(_complyId, gone, new TagText(string.Empty));
+                    PushItem(_onTimeId, gone, new TagText(string.Empty));
+                }
+            }
+
+            _complianceShown.Clear();
+            _complianceShown.UnionWith(current);
+        }
+    }
+
+    private string Register(string name, string title, string description)
+    {
+        string id = _tags.RegisterTagItem(new TagItemDefinition(name, string.Empty) { Title = title, Description = description });
+        if (id.Length == 0)
+        {
+            _logger.Error($"The tag item {name} was refused");
+        }
+
+        return id;
     }
 
     private void Reset(string callsign)

@@ -42,6 +42,9 @@ internal sealed record DepartureRecord
 {
     public string Callsign { get; init; } = string.Empty;
 
+    /// <summary>Gets the pilot's network ID, which event slots are matched on.</summary>
+    public string Cid { get; init; } = string.Empty;
+
     public string Departure { get; init; } = string.Empty;
 
     public string Arrival { get; init; } = string.Empty;
@@ -119,6 +122,22 @@ internal sealed record AirportCapacity(string Icao, int Rate, int TaxiMinutes, b
 /// <param name="Atot">The actual take-off time, "HHMM", or empty while on the ground.</param>
 /// <param name="CdmStatus">The network status, such as COMPLY or REA.</param>
 internal sealed record RestrictedFlight(string Callsign, string Ctot, string Regulation, string Atot, string CdmStatus);
+
+/// <summary>
+/// Represents one flight of vIFF's ATFCM list (<c>/etfms/relevant</c>): regulated, suspended or recently re-slotted.
+/// </summary>
+internal sealed record RelevantFlight(
+    string Callsign,
+    string Departure,
+    string Arrival,
+    string Eobt,
+    string Tobt,
+    string Ctot,
+    string Regulation,
+    string Status,
+    bool Informed,
+    bool IsRea,
+    bool IsCdm);
 
 /// <summary>
 /// Represents the controller position vIFF lists as CDM master of an airport.

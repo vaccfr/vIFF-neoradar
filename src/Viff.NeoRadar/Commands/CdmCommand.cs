@@ -17,7 +17,7 @@ internal sealed class CdmCommand : ICommandProvider
     private static readonly string[] s_subcommands =
     {
         "master", "slave", "startupdelay", "departuredelay", "lvo", "rate", "deicepads",
-        "remarks", "rmkctot", "recover", "refresh", "panel", "status", "apikey", "help",
+        "remarks", "rmkctot", "recover", "refresh", "panel", "atfcm", "status", "apikey", "help",
     };
 
     private static readonly string[] s_help =
@@ -32,6 +32,7 @@ internal sealed class CdmCommand : ICommandProvider
         ".cdm remarks / .cdm rmkctot - write the TSAT / CTOT (.CHHMM) into the scratchpad",
         ".cdm recover ICAO - read the airport's CDM data from vIFF again",
         ".cdm panel - open the CDM Airport Panel",
+        ".cdm atfcm - open the ATFCM Flight List",
         ".cdm status - show the master of each watched airport",
         ".cdm apikey KEY - set the vIFF API key writes need (.cdm apikey default returns to the one built in, if any)",
     };
@@ -46,6 +47,7 @@ internal sealed class CdmCommand : ICommandProvider
     private readonly TimeProvider _clock;
     private readonly Action _requestSync;
     private readonly Action<string?> _setApiKey;
+    private readonly Action _openAtfcm;
 
     public CdmCommand(
         CdmStore store,
@@ -57,8 +59,10 @@ internal sealed class CdmCommand : ICommandProvider
         Notifier notifier,
         TimeProvider clock,
         Action requestSync,
-        Action<string?> setApiKey)
+        Action<string?> setApiKey,
+        Action? openAtfcm = null)
     {
+        _openAtfcm = openAtfcm ?? (() => { });
         _store = store;
         _sync = sync;
         _controls = controls;
@@ -72,7 +76,7 @@ internal sealed class CdmCommand : ICommandProvider
     }
 
     public static CommandDefinition Definition { get; } = new(
-        "vIFF CDM: master, slave, startupdelay, departuredelay, lvo, rate, deicepads, remarks, rmkctot, recover, refresh, panel, status, apikey, help",
+        "vIFF CDM: master, slave, startupdelay, departuredelay, lvo, rate, deicepads, remarks, rmkctot, recover, refresh, panel, atfcm, status, apikey, help",
         new[]
         {
             new CommandParameter("action", ParameterType.String, Required: true, AllowedValues: s_subcommands),
@@ -155,6 +159,10 @@ internal sealed class CdmCommand : ICommandProvider
 
             case "panel":
                 _panel.Open();
+                return Ok(null);
+
+            case "atfcm":
+                _openAtfcm();
                 return Ok(null);
 
             case "status":

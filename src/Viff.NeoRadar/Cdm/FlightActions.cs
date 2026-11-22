@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NeoRadar.PluginSdk.Feedback;
 using Viff.NeoRadar.Common;
+using Viff.NeoRadar.Strips;
 using Viff.NeoRadar.Viff;
 
 namespace Viff.NeoRadar.Cdm;
@@ -25,6 +26,10 @@ internal sealed class FlightActions
     private readonly Notifier _notifier;
     private readonly TimeProvider _clock;
     private readonly Action _changed;
+    private readonly StripWriter? _strips;
+    private readonly AirportControls? _controls;
+    private readonly EventSlots? _slots;
+    private readonly bool _readySetTsac;
 
     public FlightActions(
         IViffApi api,
@@ -33,8 +38,16 @@ internal sealed class FlightActions
         JobScheduler scheduler,
         Notifier notifier,
         TimeProvider clock,
-        Action changed)
+        Action changed,
+        StripWriter? strips = null,
+        AirportControls? controls = null,
+        EventSlots? slots = null,
+        bool readySetTsac = false)
     {
+        _strips = strips;
+        _controls = controls;
+        _slots = slots;
+        _readySetTsac = readySetTsac;
         _api = api;
         _store = store;
         _gate = gate;
@@ -56,6 +69,11 @@ internal sealed class FlightActions
 
         string now = CdmTime.ToHhmm(_clock.GetUtcNow());
         bool rea = record.EffectiveCtot.Length > 0;
+        if (airport.IsCdm && _readySetTsac)
+        {
+            _strips?.Change(callsign, s => s.With(StripData.Tsac, StripData.TsacPending), urgent: true);
+        }
+
         if (!airport.IsCdm)
         {
             Run($"Ready EOBT {callsign}", ct => SendAllAsync(callsign, ct, $"EOBT/{now}", rea ? "REA/1" : null), null);
@@ -214,6 +232,114 @@ internal sealed class FlightActions
             Ttot = string.Empty,
         };
         Run($"Manual CTOT {(text.Length == 0 ? "removed" : text)} {callsign}", ct => WriteAsync(update, ct), null);
+    }
+
+    /// <summary>
+    /// Sets the TSAC in the flight strip: null takes the current TSAT, empty removes it, otherwise "HHMM".
+    /// </summary>
+    public void SetTsac(string callsign, string? input)
+    {
+        if (!TryStrip(callsign, input, out DepartureRecord record, out string? value))
+        {
+            return;
+        }
+
+        string tsac = value ?? CdmTime.Display(record.Cdm.Tsat);
+        if (value is null && tsac.Length == 0)
+        {
+            _notifier.Toast($"{callsign} has no TSAT yet.", FeedbackKind.Warning);
+            return;
+        }
+
+        _strips!.Change(callsign, s => s.With(StripData.Tsac, tsac), urgent: true);
+        _changed();
+    }
+
+    /// <summary>
+    /// Sets the CTOC in the flight strip: null takes the current CTOT (or removes the CTOC when there is none), empty
+    /// removes it, otherwise "HHMM".
+    /// </summary>
+    public void SetCtoc(string callsign, string? input)
+    {
+        if (!TryStrip(callsign, input, out DepartureRecord record, out string? value))
+        {
+            return;
+        }
+
+        string ctoc = value ?? CdmTime.Display(record.EffectiveCtot);
+        _strips!.Change(callsign, s => s.With(StripData.Ctoc, ctoc), urgent: true);
+        _changed();
+    }
+
+    /// <summary>
+    /// Arms automatic start-up, or disarms it; the master sets STUP once the flight is cleared and in its TSAT window.
+    /// </summary>
+    public void ToggleAutoStartup(string callsign)
+    {
+        if (!TryStrip(callsign, string.Empty, out _, out _))
+        {
+            return;
+        }
+
+        bool arming = _strips!.Current(callsign)[StripData.AutoStartup] != StripData.AutoStartupArmed;
+        _strips.Change(callsign, s => s.With(StripData.AutoStartup, arming ? StripData.AutoStartupArmed : string.Empty), urgent: true);
+        _notifier.Toast($"{callsign}: automatic start-up {(arming ? "armed" : "off")}", FeedbackKind.Info);
+        _changed();
+    }
+
+    /// <summary>
+    /// Makes the sequencer ignore a flight's CTOT, or use it again; only the master, as in the CDM plugin.
+    /// </summary>
+    public void SetCtotIgnored(string callsign, bool ignored)
+    {
+        if (_controls is null || !TryBeginMasterOnly(callsign, "whether a CTOT is used", out _))
+        {
+            return;
+        }
+
+        _controls.SetCtotIgnored(callsign, ignored);
+        _notifier.Toast($"{callsign}: CTOT {(ignored ? "ignored by the sequence" : "used again")}", FeedbackKind.Info);
+        _changed();
+    }
+
+    /// <summary>
+    /// Holds the flight to its booked event slot, as a manual CTOT.
+    /// </summary>
+    public void UseEventSlot(string callsign)
+    {
+        DepartureRecord? record = _store.Find(callsign);
+        string slot = record is null || _slots is null ? string.Empty : _slots.Find(record.Cid, record.Callsign, record.Departure, record.Arrival);
+        if (slot.Length == 0)
+        {
+            _notifier.Toast($"{callsign} has no event slot.", FeedbackKind.Warning);
+            return;
+        }
+
+        SetManualCtot(callsign, slot);
+    }
+
+    // Strip changes stay on this client and its linked instances, so they need no network gate, only a known flight.
+    private bool TryStrip(string callsign, string? input, out DepartureRecord record, out string? value)
+    {
+        record = null!;
+        value = null;
+        string text = (input ?? string.Empty).Trim();
+        if (text.Length > 0 && (text.Length != 4 || CdmTime.ParseTimeOfDay(text) is null))
+        {
+            _notifier.Toast($"{text} is not a time; enter four digits, HHMM UTC.", FeedbackKind.Warning);
+            return false;
+        }
+
+        DepartureRecord? found = _store.Find(callsign);
+        if (found is null || _strips is null)
+        {
+            _notifier.Toast($"{callsign} is not a departure vIFF knows at a watched airport.", FeedbackKind.Warning);
+            return false;
+        }
+
+        record = found;
+        value = input is null ? null : text;
+        return true;
     }
 
     private bool TryBegin(string callsign, out DepartureRecord record, out AirportView airport, out bool direct)
