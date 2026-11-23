@@ -28,7 +28,7 @@ namespace Viff.NeoRadar;
 /// </summary>
 public sealed class ViffCdmPlugin : BasePlugin
 {
-    private const string PluginVersion = "0.1.0-alpha";
+    internal const string PluginVersion = "0.2.0-alpha";
     private const string DefaultApiUrl = "https://viff-system.network/";
 
     // The placeholder key in the open-source EuroScope CDM plugin: vIFF reads accept it, writes refuse it (401). It
