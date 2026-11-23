@@ -82,12 +82,24 @@ Every id is prefixed `plugin:vIFF CDM:`.
 | `TAG_COMPLY`, `TAG_ONTIME` | Network status airborne, on-time status | |
 | | Extra (every action in one menu) | `ACTION_CDM Menu` |
 
+For small screens the plugin adds items the CDM plugin does not have, so a list needs fewer columns:
+
+| Tag item | Shows |
+|---|---|
+| `TAG_TIME` | The time that matters now, named: `TOBT 1210` (or `EOBT`) until a TSAT exists, `TSAT 1215` until start-up, then `TTOT 1225`; a suspended flight shows its TOBT. Coloured as that time's own item |
+| `TAG_TIME S` | The same with a one-letter name: `B1210` TOBT (off-block), `S1215` TSAT (start-up), `T1225` TTOT (take-off), `E` EOBT |
+| `TAG_STATUS` | The status that matters most: `SUSP`, `EXP` (TSAT expired), `REA`, `RDY` |
+| `TAG_SEQ` | Take-off order at the airport by TTOT, `01` first (started flights counted, suspended ones not); sort a list by it |
+
 `TAG_COMPLY` and `TAG_ONTIME` are pushed for every flight the client holds, airborne ones included. The CTOT menu also
 holds Ignore/Use CTOT (the CDM plugin's disable and enable CTOT, master only) and, for an event slot, Use as CTOT.
 
 Expressions for package conditions: `EXP_Listed` (a departure from one of your airports, not airborne),
-`EXP_Is CDM`, `EXP_Ready`, `EXP_Has CTOT`, `EXP_Suspended`, `EXP_Informed`, `EXP_ETFMS` and `EXP_TSAT Window`
-(`pending`, `future`, `window`, `closing`, `expired`, `suspended`).
+`EXP_Is CDM`, `EXP_Ready`, `EXP_Has CTOT`, `EXP_Suspended`, `EXP_Informed`, `EXP_ETFMS`, `EXP_TSAT Window`
+(`pending`, `future`, `window`, `closing`, `expired`, `suspended`) and `EXP_Stage`, which splits the listed CDM
+departures for short lists: `now` (start-up within 10 minutes, or ready, REA, suspended or expired), `started`
+(start-up approved, still on the ground) and `later`. `Package/systems/viff-cdm-lists.yaml` has a full list and the
+compact NOW, LATER and TOPDOWN lists built on them.
 
 ## Commands
 

@@ -67,3 +67,99 @@
       widthChars: 5
       tagItem:
         itemName: "plugin:vIFF CDM:TAG_ASRT"
+
+# Compact lists for small screens. EXP_Stage splits the departures: "now" (start-up within 10
+# minutes, ready, suspended or expired), "started" (start-up approved, still on the ground) and
+# "later". TIME names the time that matters; TIME S names it with one letter (B TOBT, S TSAT,
+# T TTOT, E EOBT); SEQ is the take-off order, so sorting by it gives the departure sequence.
+- name: CDM NOW
+  filterExpressions:
+    ["OR", [["==", "plugin:vIFF CDM:EXP_Stage", "now"], ["==", "plugin:vIFF CDM:EXP_Stage", "started"]]]
+  columns:
+    - name: "#"
+      widthChars: 2
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_SEQ"
+    - name: C/S
+      widthChars: 8
+      tagItem:
+        itemName: callsign
+        textAlign: left
+    - name: TIME
+      widthChars: 9
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TIME"
+        textAlign: left
+        leftClick: "plugin:vIFF CDM:ACTION_TOBT Menu"
+        rightClick: "plugin:vIFF CDM:ACTION_CDM Menu"
+    - name: CTOT
+      widthChars: 4
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_CTOT"
+        leftClick: "plugin:vIFF CDM:ACTION_CTOT Menu"
+    - name: STS
+      widthChars: 4
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_STATUS"
+        leftClick: "plugin:vIFF CDM:ACTION_RDY"
+        rightClick: "plugin:vIFF CDM:ACTION_RDY REA"
+
+- name: CDM LATER
+  filterExpressions: ["==", "plugin:vIFF CDM:EXP_Stage", "later"]
+  columns:
+    - name: "#"
+      widthChars: 2
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_SEQ"
+    - name: C/S
+      widthChars: 8
+      tagItem:
+        itemName: callsign
+        textAlign: left
+    - name: TIME
+      widthChars: 9
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TIME"
+        textAlign: left
+        leftClick: "plugin:vIFF CDM:ACTION_TOBT Menu"
+        rightClick: "plugin:vIFF CDM:ACTION_CDM Menu"
+    - name: CTOT
+      widthChars: 4
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_CTOT"
+        leftClick: "plugin:vIFF CDM:ACTION_CTOT Menu"
+    - name: STS
+      widthChars: 4
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_STATUS"
+        leftClick: "plugin:vIFF CDM:ACTION_RDY"
+        rightClick: "plugin:vIFF CDM:ACTION_RDY REA"
+
+- name: CDM TOPDOWN
+  filterExpressions:
+    ["OR", [["==", "plugin:vIFF CDM:EXP_Stage", "now"], ["==", "plugin:vIFF CDM:EXP_Stage", "started"]]]
+  columns:
+    - name: "#"
+      widthChars: 2
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_SEQ"
+    - name: C/S
+      widthChars: 8
+      tagItem:
+        itemName: callsign
+        textAlign: left
+    - name: TIME
+      widthChars: 5
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_TIME S"
+        textAlign: left
+        leftClick: "plugin:vIFF CDM:ACTION_CDM Menu"
+    - name: CTOT
+      widthChars: 4
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_CTOT"
+    - name: STS
+      widthChars: 4
+      tagItem:
+        itemName: "plugin:vIFF CDM:TAG_STATUS"
+        leftClick: "plugin:vIFF CDM:ACTION_RDY"

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Viff.NeoRadar.Cdm;
 using Viff.NeoRadar.Common;
 using Viff.NeoRadar.Strips;
@@ -32,6 +33,28 @@ internal enum CdmItem
     Delay,
     AutoStartup,
     EventSlot,
+    Time,
+    TimeShort,
+    Status,
+    Sequence,
+}
+
+/// <summary>
+/// Specifies where a listed departure stands, for lists that split the departures by what they need now.
+/// </summary>
+internal static class CdmStage
+{
+    /// <summary>The TSAT (or TOBT while there is none) is more than 10 minutes away, and nothing needs doing.</summary>
+    public const string Later = "later";
+
+    /// <summary>Start-up is due within 10 minutes, or the flight is ready, suspended or past its window.</summary>
+    public const string Now = "now";
+
+    /// <summary>Start-up was approved and the flight is still on the ground.</summary>
+    public const string Started = "started";
+
+    /// <summary>How long before its start-up time a flight moves from later to now.</summary>
+    public static readonly TimeSpan Lead = TimeSpan.FromMinutes(10);
 }
 
 /// <summary>
@@ -85,7 +108,8 @@ internal sealed record FlightTags(
     bool Informed,
     bool Suspended,
     TsatState Tsat,
-    string Etfms);
+    string Etfms,
+    string Stage = "");
 
 /// <summary>
 /// Turns a flight's CDM data into tag texts and colours, as the CDM plugin shows them.
@@ -118,11 +142,14 @@ internal static class CdmTagFormatter
         string ctot = CdmTime.Display(record.EffectiveCtot);
         string etfms = Etfms(record);
 
+        TagText tobtText = suspended ? Tobt(record, isCdm, now) with { Colour = Red } : Tobt(record, isCdm, now);
+        TagText tsatText = Tsat(state, tsat, flashOn);
+        (string label, string letter, TagText time) = CurrentTime(record, isCdm, started, state, tobtText, tsatText, ttot);
         Dictionary<CdmItem, TagText> items = new()
         {
-            [CdmItem.Tobt] = suspended ? Tobt(record, isCdm, now) with { Colour = Red } : Tobt(record, isCdm, now),
+            [CdmItem.Tobt] = tobtText,
             [CdmItem.SetBy] = new TagText(isCdm ? (flight.TobtSetBy.Length > 0 ? flight.TobtSetBy : strip[StripData.SetBy]) : string.Empty, DarkGreen),
-            [CdmItem.Tsat] = Tsat(state, tsat, flashOn),
+            [CdmItem.Tsat] = tsatText,
             [CdmItem.Ttg] = Ttg(state, tsat, now),
             [CdmItem.Ttot] = new TagText(ttot is null ? string.Empty : CdmTime.ToHhmm(ttot.Value)),
             [CdmItem.Ctot] = extras.CtotIgnored && ctot.Length > 0 ? new TagText(ctot, Grey) : Ctot(record, ctot, ttot, now),
@@ -145,9 +172,122 @@ internal static class CdmTagFormatter
                 _ => new TagText(string.Empty),
             },
             [CdmItem.EventSlot] = new TagText(extras.EventSlot, Grey),
+            [CdmItem.Time] = time.Text.Length == 0 ? time : time with { Text = $"{label} {time.Text}" },
+            [CdmItem.TimeShort] = time.Text.Length == 0 ? time : time with { Text = letter + time.Text },
+            [CdmItem.Status] = Status(flight, isCdm, started, suspended, state, etfms),
         };
 
-        return new FlightTags(items, isCdm, record.Cdm.Asrt.Length > 0, ctot.Length > 0, record.Informed, suspended, state, etfms);
+        string stage = Stage(flight, isCdm, started, suspended, state, etfms, tsat, now);
+        return new FlightTags(items, isCdm, record.Cdm.Asrt.Length > 0, ctot.Length > 0, record.Informed, suspended, state, etfms, stage);
+    }
+
+    /// <summary>
+    /// Gets the one time that matters now, with what it is: the TOBT (EOBT while there is none) until a TSAT is
+    /// calculated, then the TSAT until start-up, then the TTOT. A suspended flight shows its TOBT, which must change.
+    /// </summary>
+    /// <returns>The label (EOBT, TOBT, TSAT, TTOT), its one-letter form (E, B, S, T) and the time as its own item shows it.</returns>
+    private static (string Label, string Letter, TagText Time) CurrentTime(
+        DepartureRecord record,
+        bool isCdm,
+        bool started,
+        TsatState state,
+        TagText tobt,
+        TagText tsat,
+        DateTimeOffset? ttot)
+    {
+        (string Label, string Letter) offBlock = isCdm && record.Cdm.Tobt.Length > 0 ? ("TOBT", "B") : ("EOBT", "E");
+        if (!isCdm)
+        {
+            return (offBlock.Label, offBlock.Letter, tobt);
+        }
+
+        if (started)
+        {
+            return ("TTOT", "T", new TagText(ttot is null ? string.Empty : CdmTime.ToHhmm(ttot.Value)));
+        }
+
+        return state is TsatState.Pending or TsatState.Suspended
+            ? (offBlock.Label, offBlock.Letter, tobt)
+            : ("TSAT", "S", tsat);
+    }
+
+    // The one status that matters most: suspended, expired, REA, then ready.
+    private static TagText Status(FlightView flight, bool isCdm, bool started, bool suspended, TsatState state, string etfms)
+    {
+        if (!flight.Watched || !isCdm)
+        {
+            return new TagText(string.Empty);
+        }
+
+        if (suspended)
+        {
+            return new TagText("SUSP", Red);
+        }
+
+        if (started)
+        {
+            return new TagText(string.Empty);
+        }
+
+        if (state == TsatState.Expired)
+        {
+            return new TagText("EXP", Red);
+        }
+
+        if (etfms == "REA")
+        {
+            return new TagText("REA", Yellow);
+        }
+
+        return flight.Record.Cdm.Asrt.Length > 0 ? new TagText("RDY", DarkGreen) : new TagText(string.Empty);
+    }
+
+    private static string Stage(FlightView flight, bool isCdm, bool started, bool suspended, TsatState state, string etfms, DateTimeOffset? tsat, DateTimeOffset now)
+    {
+        DepartureRecord record = flight.Record;
+        if (!flight.Watched || !isCdm)
+        {
+            return string.Empty;
+        }
+
+        if (started)
+        {
+            return CdmStage.Started;
+        }
+
+        if (suspended || etfms == "REA" || record.Cdm.Asrt.Length > 0 || state is TsatState.Window or TsatState.Closing or TsatState.Expired)
+        {
+            return CdmStage.Now;
+        }
+
+        DateTimeOffset? due = tsat ?? CdmTime.ParseNear(record.Cdm.Tobt.Length > 0 ? record.Cdm.Tobt : record.Eobt, now);
+        return due is not null && due.Value - now <= CdmStage.Lead ? CdmStage.Now : CdmStage.Later;
+    }
+
+    /// <summary>
+    /// Numbers each airport's departures in take-off order, by TTOT, from 01: started flights included, suspended and
+    /// airborne ones left out. Two digits, so a list sorted by the column sorts by take-off order.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> Sequence(IReadOnlyList<FlightView> flights, DateTimeOffset now)
+    {
+        Dictionary<string, string> numbers = new(StringComparer.OrdinalIgnoreCase);
+        IEnumerable<IGrouping<string, (FlightView Flight, DateTimeOffset Ttot)>> airports = flights
+            .Where(f => f.Watched && f.Airport.IsCdm && !f.Record.IsAirborne && f.Record.Suspension.Length == 0)
+            .Select(f => (Flight: f, Ttot: CdmTime.ParseNear(f.Record.Cdm.Ttot, now)))
+            .Where(f => f.Ttot is not null)
+            .Select(f => (f.Flight, Ttot: f.Ttot!.Value))
+            .GroupBy(f => f.Flight.Record.Departure, StringComparer.OrdinalIgnoreCase);
+        foreach (IGrouping<string, (FlightView Flight, DateTimeOffset Ttot)> airport in airports)
+        {
+            int number = 0;
+            foreach ((FlightView flight, _) in airport.OrderBy(f => f.Ttot).ThenBy(f => f.Flight.Record.Callsign, StringComparer.Ordinal))
+            {
+                number++;
+                numbers[flight.Record.Callsign] = number.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        return numbers;
     }
 
     public static TsatState StateOf(bool isCdm, bool started, DateTimeOffset? tsat, DateTimeOffset now)

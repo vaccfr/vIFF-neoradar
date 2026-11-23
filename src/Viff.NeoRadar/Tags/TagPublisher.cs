@@ -34,6 +34,10 @@ internal sealed class TagPublisher
         (CdmItem.Delay, "DLY", "DLY", "Start-up delay in minutes, TSAT minus TOBT"),
         (CdmItem.AutoStartup, "AUTO", "AUTO", "Automatic start-up: S armed (green) or done (grey)"),
         (CdmItem.EventSlot, "EVSLOT", "EVSLOT", "The event slot booked for the flight"),
+        (CdmItem.Time, "TIME", "TIME", "The time that matters now, named: EOBT or TOBT until a TSAT exists, then TSAT until start-up, then TTOT; coloured as its own item"),
+        (CdmItem.TimeShort, "TIME S", "TIME S", "TIME with a one-letter name, for small lists: E EOBT, B TOBT (off-block), S TSAT (start-up), T TTOT (take-off)"),
+        (CdmItem.Status, "STATUS", "STATUS", "The status that matters most: SUSP suspended, EXP TSAT expired, REA, RDY ready"),
+        (CdmItem.Sequence, "SEQ", "SEQ", "Take-off order at the airport by TTOT, 01 first; sort a list by it for the departure sequence"),
     };
 
     private readonly ITagInterface _tags;
@@ -50,6 +54,7 @@ internal sealed class TagPublisher
     private string _suspendedId = string.Empty;
     private string _tsatWindowId = string.Empty;
     private string _etfmsId = string.Empty;
+    private string _stageId = string.Empty;
 
     // Guards the caches; the publish job and the sync job both publish.
     private readonly object _lock = new();
@@ -91,6 +96,8 @@ internal sealed class TagPublisher
         _tsatWindowId = Declare(ExpressionDefinition.Text("TSAT Window", string.Empty,
             "pending, future, window, closing, expired or suspended; empty when not a CDM flight or started"));
         _etfmsId = Declare(ExpressionDefinition.Text("ETFMS", string.Empty, "The network status shown in the ETFMS item"));
+        _stageId = Declare(ExpressionDefinition.Text("Stage", string.Empty,
+            "later, now (start-up within 10 minutes, ready, suspended or expired) or started; empty when not a listed CDM departure"));
     }
 
     /// <summary>
@@ -102,6 +109,7 @@ internal sealed class TagPublisher
         lock (_lock)
         {
             HashSet<string> current = new(StringComparer.OrdinalIgnoreCase);
+            IReadOnlyDictionary<string, string> sequence = CdmTagFormatter.Sequence(flights, now);
             foreach (FlightView flight in flights)
             {
                 string callsign = flight.Record.Callsign;
@@ -111,6 +119,9 @@ internal sealed class TagPublisher
                 {
                     PushItem(_itemIds[item.Key], callsign, item.Value);
                 }
+
+                PushItem(_itemIds[CdmItem.Sequence], callsign, new TagText(sequence.GetValueOrDefault(callsign) ?? string.Empty));
+                PushExpression(_stageId, callsign, tags.Stage);
 
                 PushExpression(_listedId, callsign, flight.Watched);
                 PushExpression(_isCdmId, callsign, tags.IsCdm);
@@ -197,6 +208,7 @@ internal sealed class TagPublisher
         PushExpression(_suspendedId, callsign, false);
         PushExpression(_tsatWindowId, callsign, string.Empty);
         PushExpression(_etfmsId, callsign, string.Empty);
+        PushExpression(_stageId, callsign, string.Empty);
     }
 
     private string Declare(ExpressionDefinition definition)
