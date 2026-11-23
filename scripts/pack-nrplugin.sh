@@ -4,8 +4,8 @@
 #   scripts/pack-nrplugin.sh [--with-key] <output dir> [archive name]      (name defaults to vIFF-CDM-alpha)
 #
 # Without --with-key the build carries no vIFF API key: it reads vIFF, and controllers given the key set it with
-# .cdm apikey. With --with-key it carries the key from VIFF_API_KEY or .env (see the README), as the EuroScope CDM
-# plugin's DLL carries its key: anyone with the archive can read the key back out of it.
+# .cdm apikey. With --with-key it carries the key from VIFF_API_KEY or .env (see the README), masked rather than as
+# plain text, as the EuroScope CDM plugin's DLL carries its key: it is harder to dump, not secret.
 # Needs the .NET SDK, Python and neoradar-cli (or NEORADAR_CLI="node <cli>/dist/index.js").
 set -euo pipefail
 
@@ -36,23 +36,21 @@ else
   fi
 fi
 
-# The key in .env, if any, must be in the DLL with --with-key and nowhere in it without. Only the result is printed.
-python -I - "$repo/.env" "$stage/bin/Viff.NeoRadar.dll" "$with_key" <<'PY'
+# The key is built in masked (see the .csproj), so in either mode it must not appear in the DLL as plain text; the
+# build's message above confirms whether one is built in. Only the result is printed.
+python -I - "$repo/.env" "$stage/bin/Viff.NeoRadar.dll" <<'PY'
 import os
 import sys
 from pathlib import Path
-env, dll, want = Path(sys.argv[1]), Path(sys.argv[2]).read_bytes(), sys.argv[3] == "true"
+env, dll = Path(sys.argv[1]), Path(sys.argv[2]).read_bytes()
 key = os.environ.get("VIFF_API_KEY", "").strip().strip("\"'")
 if not key and env.exists():
     for line in env.read_text(encoding="utf-8").splitlines():
         if line.strip().startswith("VIFF_API_KEY="):
             key = line.split("=", 1)[1].strip().strip("\"'")
-found = bool(key) and (key.encode("utf-16-le") in dll or key.encode("utf-8") in dll)
-if want and not found:
-    sys.exit("The API key is not in the DLL; nothing was packed.")
-if not want and found:
-    sys.exit("The vIFF API key was found in the DLL; nothing was packed.")
-print("Key check: key built in" if want else "Key check: clean")
+if key and (key.encode("utf-16-le") in dll or key.encode("utf-8") in dll):
+    sys.exit("The vIFF API key is readable as plain text in the DLL; nothing was packed.")
+print("Key check: no plain-text key in the DLL")
 PY
 
 mkdir -p "$stage/plugins/$name" "$out"

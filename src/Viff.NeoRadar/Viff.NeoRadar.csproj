@@ -22,9 +22,40 @@
 
   <!--
     The vIFF API key built into the plugin: the VIFF_API_KEY environment variable, else VIFF_API_KEY=... in the
-    gitignored .env at the repository root, else none. -p:ViffEmbedKey=false builds without it, which every build for
-    a published package must (scripts/pack-nrplugin.sh does). A key in a DLL can be read back out of it.
+    gitignored .env at the repository root, else none. -p:ViffEmbedKey=false builds without it. The key is never
+    written in plain text: the generated source holds it XOR-masked, decoded at run time, so it is not a readable
+    string in the DLL. That only makes it harder to dump, as for the EuroScope CDM plugin's key; it is not secret.
   -->
+  <UsingTask TaskName="ViffMaskKey" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Key ParameterType="System.String" />
+      <Source ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Security.Cryptography" />
+      <Using Namespace="System.Text" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        byte[] plain = Encoding.UTF8.GetBytes(Key ?? string.Empty);
+        // A mask derived from the key keeps the generated file stable between builds, so it does not force a rebuild.
+        byte[] seed;
+        using (SHA256 sha = SHA256.Create())
+        {
+            seed = sha.ComputeHash(Encoding.UTF8.GetBytes("vIFF-neoradar mask/" + Key));
+        }
+
+        byte[] mask = Enumerable.Range(0, plain.Length).Select(i => (byte)(seed[i % seed.Length] ^ (i * 151))).ToArray();
+        byte[] data = plain.Select((b, i) => (byte)(b ^ mask[i])).ToArray();
+        Source = "namespace Viff.NeoRadar.Common { internal static class BuildSecrets { " +
+                 "private static readonly byte[] s_data = { " + string.Join(", ", data) + " }; " +
+                 "private static readonly byte[] s_mask = { " + string.Join(", ", mask) + " }; " +
+                 "public static readonly string ApiKey = Decode(); " +
+                 "private static string Decode() { byte[] key = new byte[s_data.Length]; " +
+                 "for (int i = 0; i < key.Length; i++) { key[i] = (byte)(s_data[i] ^ s_mask[i]); } " +
+                 "return System.Text.Encoding.UTF8.GetString(key); } } }";
+      ]]></Code>
+    </Task>
+  </UsingTask>
   <PropertyGroup>
     <ViffEmbedKey Condition="'$(ViffEmbedKey)' == ''">true</ViffEmbedKey>
     <ViffEnvFile>$(MSBuildThisFileDirectory)..\..\.env</ViffEnvFile>
@@ -50,8 +81,10 @@
       <_ViffKey Condition="$(_ViffKey.StartsWith('VIFF_API_KEY='))">$(_ViffKey.Substring(13).Trim())</_ViffKey>
       <_ViffKey>$(_ViffKey.Replace('"', '').Replace("'", '').Replace('\', ''))</_ViffKey>
     </PropertyGroup>
-    <WriteLinesToFile File="$(ViffBuildKeyFile)" Overwrite="true" WriteOnlyWhenDifferent="true"
-                      Lines="namespace Viff.NeoRadar.Common { internal static class BuildSecrets { public const string ApiKey = &quot;$(_ViffKey)&quot;%3B } }" />
+    <ViffMaskKey Key="$(_ViffKey)">
+      <Output TaskParameter="Source" PropertyName="_ViffKeySource" />
+    </ViffMaskKey>
+    <WriteLinesToFile File="$(ViffBuildKeyFile)" Overwrite="true" WriteOnlyWhenDifferent="true" Lines="$([MSBuild]::Escape($(_ViffKeySource)))" />
     <ItemGroup>
       <Compile Include="$(ViffBuildKeyFile)" />
       <FileWrites Include="$(ViffBuildKeyFile)" />
