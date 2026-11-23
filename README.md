@@ -141,12 +141,16 @@ The plugin uses, first found:
    root, which is gitignored;
 3. the CDM plugin's placeholder `TEST`, which reads only.
 
-The startup log line says which one is in use, never the key. A key built into a DLL can be read back out of it, so
-a key-carrying build is for local or private use only. **A plugin for a published package is packed without a key:**
+The startup log line says which one is in use, never the key. To pack the plugin for a package, for Windows, macOS
+and Linux:
 
 ```bash
-scripts/pack-nrplugin.sh <package>/plugins          # builds keyless, checks the DLL holds no .env key, packs it
+scripts/pack-nrplugin.sh --with-key <package>/plugins   # the key from VIFF_API_KEY or .env built in, checked
+scripts/pack-nrplugin.sh <package>/plugins              # no key: reads only, until a controller sets one
 ```
+
+A key built into a DLL can be read back out of it, as from the EuroScope CDM plugin's DLL; the `.env` file itself is
+never committed.
 
 ## Building
 
