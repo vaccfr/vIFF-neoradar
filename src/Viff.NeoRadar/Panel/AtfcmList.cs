@@ -15,8 +15,8 @@ namespace Viff.NeoRadar.Panel;
 /// The ATFCM Flight List: vIFF's regulated, suspended and re-slotted flights, as the CDM plugin's <c>.cdm atfcm</c> panel.
 /// </summary>
 /// <remarks>
-/// The filter is a prefix of the departure, arrival or regulation, by default the first two letters of the controller's
-/// callsign. Double-clicking a row selects the aircraft. Window calls are safe from any thread; events arrive on the UI thread.
+/// Only your own departures show: flights from the airports set active with a departure runway, as NeoRadar's
+/// isMyDeparture. The filter, a prefix of the departure, arrival or regulation, narrows them further. Double-clicking a row selects the aircraft. Window calls are safe from any thread; events arrive on the UI thread.
 /// </remarks>
 internal sealed class AtfcmList
 {
@@ -34,14 +34,23 @@ internal sealed class AtfcmList
     private readonly ISettingsApi _settings;
     private readonly ConnectionGate _gate;
     private readonly JobScheduler _scheduler;
+    private readonly Func<IReadOnlyCollection<string>> _myAirports;
 
     // Guards _handle and _filter; opened from the command and menu threads, refreshed from the pool.
     private readonly object _lock = new();
     private WindowHandle _handle = WindowHandle.Invalid;
     private string _filter = string.Empty;
 
-    public AtfcmList(IWindowInterface windows, IViffApi api, IFocusApi focus, ISettingsApi settings, ConnectionGate gate, JobScheduler scheduler)
+    public AtfcmList(
+        IWindowInterface windows,
+        IViffApi api,
+        IFocusApi focus,
+        ISettingsApi settings,
+        ConnectionGate gate,
+        JobScheduler scheduler,
+        Func<IReadOnlyCollection<string>>? myAirports = null)
     {
+        _myAirports = myAirports ?? Array.Empty<string>;
         _windows = windows;
         _api = api;
         _focus = focus;
@@ -60,7 +69,7 @@ internal sealed class AtfcmList
     /// </summary>
     public void Open()
     {
-        string filter = _settings.Get(FilterSetting) ?? DefaultFilter();
+        string filter = _settings.Get(FilterSetting) ?? string.Empty;
         WindowHandle previous;
         lock (_lock)
         {
@@ -179,14 +188,24 @@ internal sealed class AtfcmList
             return;
         }
 
+        HashSet<string> mine = new(_myAirports(), StringComparer.OrdinalIgnoreCase);
+        if (mine.Count == 0)
+        {
+            _windows.SetTableRows(handle, TableId, Array.Empty<TableRow>(), -1);
+            _windows.UpdateElement(handle, CountId, "No airport active with a departure runway: your departures show here once one is");
+            return;
+        }
+
         List<TableRow> rows = flights
+            .Where(f => mine.Contains(f.Departure))
             .OrderBy(f => f.Ctot.Length == 0)
             .ThenBy(f => f.Ctot, StringComparer.Ordinal)
             .ThenBy(f => f.Callsign, StringComparer.Ordinal)
             .Select(Row)
             .ToList();
         _windows.SetTableRows(handle, TableId, rows, -1);
-        _windows.UpdateElement(handle, CountId, $"{rows.Count} flight(s){(filter.Length > 0 ? $" matching {filter}" : string.Empty)}");
+        _windows.UpdateElement(handle, CountId,
+            $"{rows.Count} of your departure(s) from {string.Join(" ", mine.Order(StringComparer.Ordinal))}{(filter.Length > 0 ? $" matching {filter}" : string.Empty)}");
     }
 
     public void Close()
@@ -258,11 +277,5 @@ internal sealed class AtfcmList
                 flight.IsRea ? "REA" : string.Empty,
             },
             suspended ? s_suspended : flight.IsRea ? s_ready : null);
-    }
-
-    private string DefaultFilter()
-    {
-        string callsign = _gate.Callsign;
-        return callsign.Length >= 2 && char.IsLetter(callsign[0]) && char.IsLetter(callsign[1]) ? callsign[..2].ToUpperInvariant() : string.Empty;
     }
 }

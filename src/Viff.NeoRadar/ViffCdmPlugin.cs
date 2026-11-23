@@ -248,7 +248,10 @@ public sealed class ViffCdmPlugin : BasePlugin
         FlightActions actions = new(api, store, gate, scheduler, notifier, clock, Changed, stripWriter, controls, slots, ReadySetTsac);
         MasterRole master = new(api, store, sync, gate, scheduler, notifier, Changed);
         AirportPanel panel = new(core.Window.GetInterface(), store, sync, controls, master, gate, notifier);
-        AtfcmList atfcm = new(core.Window.GetInterface(), api, core.Focus, settings, gate, scheduler);
+        AtfcmList atfcm = new(core.Window.GetInterface(), api, core.Focus, settings, gate, scheduler, () => core.Airport.GetConfigurations()
+            .Where(c => c.Status == AirportStatus.Active && c.DepRunways.Count > 0)
+            .Select(c => c.Icao)
+            .ToList());
         TagMenus tagMenus = new(core.Tag.GetInterface(), store, controls, actions, core.Logger,
             record => slots.Find(record.Cid, record.Callsign, record.Departure, record.Arrival), stripWriter.Current);
         CdmCommand command = new(store, sync, controls, master, panel, gate, notifier, clock, RequestSync, key =>

@@ -96,19 +96,21 @@ public sealed class StepTwoBehaviourTests
     }
 
     [Fact]
-    public async Task AtfcmList_ShowsVIffsListAndSelectsTheAircraftOnDoubleClick()
+    public async Task AtfcmList_ShowsYourDeparturesOnlyAndSelectsTheAircraftOnDoubleClick()
     {
         _api.Relevant.Add(new RelevantFlight("SWR2549", "LSGG", "LFPG", "1600", "1600", "1605", "LF-FF_LMHJ-E", "SRM", true, false, false));
         _api.Relevant.Add(new RelevantFlight("CCM200", "LFPO", "LFKC", "1815", "", "", "", "FLS-NRA", false, false, true));
+        _api.Relevant.Add(new RelevantFlight("DLH1", "EDDF", "LFPG", "1600", "1600", "1610", "ED-REG", "SRM", true, false, false));
         RecordingWindows windows = new();
         RecordingFocus focus = new();
         JobScheduler scheduler = new(_clock, new FakeLogger());
-        AtfcmList list = new(windows, _api, focus, new FakeSettings(), new ConnectionGate(FakeFsd.LiveAtc(Me)), scheduler);
+        AtfcmList list = new(windows, _api, focus, new FakeSettings(), new ConnectionGate(FakeFsd.LiveAtc(Me)), scheduler,
+            () => new[] { "LSGG", "LFPO" });
 
         list.Open();
         Assert.True(scheduler.WaitForIdle(TimeSpan.FromSeconds(5)));
 
-        Assert.Equal("LF", Assert.Single(_api.RelevantFilters));
+        Assert.Equal(string.Empty, Assert.Single(_api.RelevantFilters));
         IReadOnlyList<TableRow> rows = windows.Rows!;
         Assert.Equal(new[] { "SWR2549", "CCM200" }, rows.Select(r => r.Id));
         Assert.NotNull(rows[1].Style);

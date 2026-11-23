@@ -53,7 +53,8 @@ A departure's rate is, first found: `.cdm rate`, the `rate.txt` line of its runw
 - **CDM Airport Panel** is a compact NeoRadar window, one chip per CDM airport: **CDM Airport Panel** in the Insets &
   Plugin Windows menu, or `.cdm panel`. Left click connects or releases master, right click switches LVO.
 - **ATFCM Flight List** is a NeoRadar window too (`.cdm atfcm`, or the menu): vIFF's regulated, suspended and re-slotted
-  flights, filtered by a prefix (by default your callsign's first two letters); double click selects the aircraft.
+  flights departing your active airports (as NeoRadar's `isMyDeparture`), narrowed further by an optional prefix
+  filter; double click selects the aircraft.
 - **Writes are gated.** Nothing is written to vIFF unless you are connected as ATC on the live network.
 
 ## Items
